@@ -57,6 +57,10 @@ class InstallerTest(unittest.TestCase):
         self.assertTrue((self.control / "libexec" / "apply_proposals.py").is_file())
         self.assertTrue((self.control / ".codex" / "hooks.json").is_file())
         self.assertTrue((self.control / "automation-prompt.md").is_file())
+        self.assertTrue((self.control / "scheduled-task.spec.toml").is_file())
+        self.assertEqual(payload["automation_spec"], str(self.control.resolve() / "scheduled-task.spec.toml"))
+        task_spec = (self.control / "scheduled-task.spec.toml").read_text(encoding="utf-8")
+        self.assertIn(f'project = "{self.control.resolve()}"', task_spec)
         config = json.loads((self.control / "config.json").read_text(encoding="utf-8"))
         self.assertEqual(config["remote_hosts"], [])
         self.assertEqual(config["control_root"], str(self.control.resolve()))
@@ -76,6 +80,8 @@ class InstallerTest(unittest.TestCase):
         os.chmod(config_path, 0o644)
         marker = self.control / "runtime" / "findings" / "keep.json"
         marker.write_text("{}", encoding="utf-8")
+        previous_spec = self.control / "scheduled-task.spec.toml"
+        previous_spec.write_text("old task spec\n", encoding="utf-8")
         result = self.run_installer("--upgrade")
         payload = json.loads(result.stdout)
         self.assertEqual(payload["status"], "upgraded")
@@ -83,6 +89,7 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(updated["custom_test_value"], "preserve-me")
         self.assertEqual(config_path.stat().st_mode & 0o777, 0o600)
         self.assertTrue(marker.is_file())
+        self.assertNotEqual(previous_spec.read_text(encoding="utf-8"), "old task spec\n")
         self.assertIsNotNone(payload["managed_backup"])
         self.assertIsNotNone(payload["standalone_skill_backup"])
 

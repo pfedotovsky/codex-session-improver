@@ -1,0 +1,13 @@
+# Portable source specification for the recommended Codex scheduled task.
+# Codex's app-managed automation remains the runtime source of truth.
+# Do not copy this file into $CODEX_HOME/automations.
+
+spec_version = 1
+name = "Codex improvement review"
+kind = "standalone"
+project = "<control-root>"
+execution_environment = "local"
+schedule = "daily at 12:45 local time"
+reasoning_effort = "high"
+model = "high-reasoning model"
+prompt_file = "automation-prompt.md"

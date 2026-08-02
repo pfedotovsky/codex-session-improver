@@ -11,7 +11,7 @@
    ```
 
 4. Report the generated files and ask the user to trust hooks for the new control project when Codex first opens it.
-5. Create a standalone local scheduled task through the Codex app automation capability. Use the generated prompt at `<control-root>/automation-prompt.md`, select the control project, and use the user's requested cadence. If none is supplied, recommend daily at 12:45 in the user's local timezone with a high-reasoning model.
+5. Create a standalone local scheduled task through the Codex app automation capability. Use the generated prompt at `<control-root>/automation-prompt.md` and the portable source specification at `<control-root>/scheduled-task.spec.toml`, select the control project, and use the user's requested cadence. If none is supplied, recommend daily at 12:45 in the user's local timezone with a high-reasoning model. Treat the Codex app as the runtime source of truth; do not copy the portable specification into Codex's private automation state.
 6. Run diagnostics from `<control-root>/libexec/diagnose.py` before declaring setup complete.
 
 The installer does not write Codex's private automation state directly. It generates the prompt and project configuration, while the app creates the scheduled task through its supported automation interface.

@@ -112,6 +112,7 @@ def backup_managed_files(control_root: Path) -> Path | None:
         control_root / "AGENTS.md",
         control_root / ".gitignore",
         control_root / "automation-prompt.md",
+        control_root / "scheduled-task.spec.toml",
         control_root / ".codex" / "hooks.json",
         control_root / ".codex" / "config.toml",
     )
@@ -277,6 +278,12 @@ def main() -> int:
         control_root / "automation-prompt.md",
         (templates / "automation-prompt.md").read_text(encoding="utf-8"),
     )
+    atomic_text(
+        control_root / "scheduled-task.spec.toml",
+        (templates / "scheduled-task.spec.toml")
+        .read_text(encoding="utf-8")
+        .replace("<control-root>", str(control_root)),
+    )
     atomic_text(control_root / ".codex" / "hooks.json", render_hooks(Path(sys.executable).resolve(), control_root))
     atomic_text(
         control_root / ".codex" / "config.toml",
@@ -295,6 +302,7 @@ def main() -> int:
         **plan,
         "hook_trust_required": True,
         "automation_prompt": str(control_root / "automation-prompt.md"),
+        "automation_spec": str(control_root / "scheduled-task.spec.toml"),
         "managed_backup": str(backup) if backup else None,
         "standalone_skill_path": str(skill_target) if skill_target else None,
         "standalone_skill_backup": str(skill_backup) if skill_backup else None,

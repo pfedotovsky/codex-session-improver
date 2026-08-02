@@ -39,9 +39,11 @@ Start a new Codex task and ask:
 Use $codex-improver to install the control project under ~/projects/codex-improver.
 ```
 
-The skill creates a private control project, installs stable deterministic scripts under `libexec/`, generates project-local hooks, and prepares a scheduled-task prompt. Trust the hooks when Codex first opens that control project.
+The skill creates a private control project, installs stable deterministic scripts under `libexec/`, generates project-local hooks, and prepares a version-controlled scheduled-task specification and prompt. Trust the hooks when Codex first opens that control project.
 
-Open the generated control project in Codex and create a standalone local scheduled task using `automation-prompt.md`. A daily run at 12:45 local time with a high-reasoning model is a practical default. The installer does not edit Codex's private automation state.
+Open the generated control project in Codex and create a standalone local scheduled task using `scheduled-task.spec.toml` and `automation-prompt.md`. A daily run at 12:45 local time with a high-reasoning model is a practical default.
+
+`scheduled-task.spec.toml` is a portable, project-owned description rather than Codex's private automation format. It records the intended task configuration in code review while the Codex app remains the runtime source of truth. The installer does not edit Codex's private automation state.
 
 ## What a proposal looks like
 
