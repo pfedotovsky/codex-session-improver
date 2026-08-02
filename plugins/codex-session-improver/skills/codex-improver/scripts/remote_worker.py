@@ -298,7 +298,8 @@ def inspect(request: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
 def atomic_text(path: Path, value: str, mode: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temp.write_text(value, encoding="utf-8", newline="")
+    with temp.open("w", encoding="utf-8", newline="") as handle:
+        handle.write(value)
     os.chmod(temp, mode)
     os.replace(temp, path)
 

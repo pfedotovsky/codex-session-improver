@@ -32,7 +32,8 @@ RUNTIME_DIRS = ("batches", "findings", "proposals", "approvals", "backups", "run
 def atomic_text(path: Path, text: str, mode: int = 0o644) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    temporary.write_text(text, encoding="utf-8", newline="")
+    with temporary.open("w", encoding="utf-8", newline="") as handle:
+        handle.write(text)
     os.chmod(temporary, mode)
     os.replace(temporary, path)
 
