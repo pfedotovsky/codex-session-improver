@@ -58,6 +58,12 @@ class InstallerTest(unittest.TestCase):
         self.assertTrue((self.control / ".codex" / "hooks.json").is_file())
         self.assertTrue((self.control / "automation-prompt.md").is_file())
         self.assertTrue((self.control / "scheduled-task.spec.toml").is_file())
+        automation_prompt = (self.control / "automation-prompt.md").read_text(encoding="utf-8")
+        self.assertEqual(
+            automation_prompt,
+            "Use `$codex-improver` to run the next safety-gated review of settled local and remote Codex sessions. "
+            "Analyze only; do not apply proposals.\n",
+        )
         self.assertEqual(payload["automation_spec"], str(self.control.resolve() / "scheduled-task.spec.toml"))
         task_spec = (self.control / "scheduled-task.spec.toml").read_text(encoding="utf-8")
         self.assertIn(f'project = "{self.control.resolve()}"', task_spec)

@@ -18,6 +18,6 @@
     "developerName": "Pavel Fedotovsky",
     "category": "Productivity",
     "capabilities": ["Interactive", "Write"],
-    "defaultPrompt": "Use $codex-improver to install or run a safe session improvement review."
+    "defaultPrompt": "Use $codex-improver to run the next safety-gated session review now. Analyze only; do not apply proposals."
   }
 }

@@ -36,14 +36,18 @@ codex plugin add codex-session-improver@codex-session-improver
 Start a new Codex task and ask:
 
 ```text
-Use $codex-improver to install the control project under ~/projects/codex-improver.
+Use $codex-improver to install the control project under ~/projects/codex-improver and create the recommended daily scheduled review.
 ```
 
-The skill creates a private control project, installs stable deterministic scripts under `libexec/`, generates project-local hooks, and prepares a version-controlled scheduled-task specification and prompt. Trust the hooks when Codex first opens that control project.
+The skill creates a private control project, installs stable deterministic scripts under `libexec/`, generates project-local hooks, and creates the scheduled task through Codex's supported automation interface. Trust the hooks when Codex first opens that control project.
 
-Open the generated control project in Codex and create a standalone local scheduled task using `scheduled-task.spec.toml` and `automation-prompt.md`. A daily run at 12:45 local time with a high-reasoning model is a practical default.
+To run the same workflow immediately without waiting for the schedule, ask from chat:
 
-`scheduled-task.spec.toml` is a portable, project-owned description rather than Codex's private automation format. It records the intended task configuration in code review while the Codex app remains the runtime source of truth. The installer does not edit Codex's private automation state.
+```text
+Use $codex-improver to run the next session review now. Analyze only; do not apply proposals.
+```
+
+Both entry points call the same skill, so the safety and analysis workflow stays in one place. `scheduled-task.spec.toml` remains a portable, project-owned description rather than Codex's private automation format, and `automation-prompt.md` provides the generated one-line task prompt. The Codex app remains the runtime source of truth; only its supported automation interface edits private task state.
 
 ## What a proposal looks like
 
