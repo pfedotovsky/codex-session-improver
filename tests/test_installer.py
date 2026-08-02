@@ -73,6 +73,7 @@ class InstallerTest(unittest.TestCase):
         config = json.loads(config_path.read_text(encoding="utf-8"))
         config["custom_test_value"] = "preserve-me"
         config_path.write_text(json.dumps(config), encoding="utf-8")
+        os.chmod(config_path, 0o644)
         marker = self.control / "runtime" / "findings" / "keep.json"
         marker.write_text("{}", encoding="utf-8")
         result = self.run_installer("--upgrade")
@@ -80,6 +81,7 @@ class InstallerTest(unittest.TestCase):
         self.assertEqual(payload["status"], "upgraded")
         updated = json.loads(config_path.read_text(encoding="utf-8"))
         self.assertEqual(updated["custom_test_value"], "preserve-me")
+        self.assertEqual(config_path.stat().st_mode & 0o777, 0o600)
         self.assertTrue(marker.is_file())
         self.assertIsNotNone(payload["managed_backup"])
         self.assertIsNotNone(payload["standalone_skill_backup"])

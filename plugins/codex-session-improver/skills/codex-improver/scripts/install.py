@@ -234,6 +234,8 @@ def main() -> int:
         return 0
 
     control_root.mkdir(parents=True, exist_ok=True)
+    if existing_config is not None:
+        os.chmod(config_path, 0o600)
     backup = backup_managed_files(control_root) if args.upgrade else None
     for name in RUNTIME_DIRS:
         (control_root / "runtime" / name).mkdir(parents=True, exist_ok=True)
