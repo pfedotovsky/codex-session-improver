@@ -1,6 +1,6 @@
 ---
 name: codex-improver
-description: Install and operate a safety-gated Codex session improvement loop that analyzes local and SSH-host sessions, retains only redacted findings, proposes host-bound AGENTS.md, skill, or documentation patches, and applies only exact approved proposals. Use for improver setup, scheduled reviews, host discovery diagnostics, cross-host feedback propagation, pending proposal inspection, or an exact APPROVE P-... command.
+description: Install and operate a safety-gated Codex session improvement loop that analyzes local and SSH-host sessions, retains only redacted findings, proposes host-bound AGENTS.md, skill, or documentation patches, and applies only task-bound approved proposals. Use for improver setup, scheduled reviews, host discovery diagnostics, cross-host feedback propagation, pending proposal inspection, or an approval-question response.
 ---
 
 # Codex Improver
@@ -14,7 +14,7 @@ Resolve `<skill-root>` as the directory containing this `SKILL.md`. Resolve `<co
 ## Choose the workflow
 
 - Setup or upgrade request: follow `references/setup.md`.
-- Exact current user prompt `APPROVE P-...`: run only the approval workflow.
+- Hook-confirmed response to an active approval question: run only the approval workflow.
 - Scheduled or requested session review: run the analysis workflow.
 - Diagnostic request: run `diagnose.py`; do not analyze sessions or modify targets.
 
@@ -50,18 +50,23 @@ Resolve `<skill-root>` as the directory containing this `SKILL.md`. Resolve `<co
    ```
 
 9. Report at most three proposals with ID, evidence, exact target, expected benefit, risk, rollback, and validation. If none meets the threshold, report no proposal.
+10. When proposals were created, register one task-bound approval question for their exact IDs:
+
+   ```text
+   python3 <control-root>/libexec/approval_prompt.py --control-root <control-root> --proposal-id P-... [--proposal-id P-...]
+   ```
+
+   Copy the returned question faithfully, translate it to the user's language if needed, make clear that “no” rejects the listed proposals, and end the turn by asking it. Do not ask the user to type a command or retype proposal IDs.
 
 Do not edit targets during analysis. Do not broaden target roots, discovery sources, or script allowlists during a scheduled run. Never persist raw or normalized transcripts. Raw remote transcript content must not leave its host.
 
-## Apply an approval
+## Handle an approval answer
 
-Only when the complete current user prompt exactly matches `APPROVE P-...`, run this request once:
+When the `UserPromptSubmit` hook confirms that the current answer approved an active task-bound question, run the receipt-bound command supplied by the hook once. A short natural answer such as “yes”, “да”, or “Аппрувлю эту правку” is valid only when that hook context is present.
 
-```text
-python3 <control-root>/libexec/apply_proposals.py --control-root <control-root> --from-current-approval
-```
+The control project's hooks bind the natural answer to the active question in the same task and create a one-time turn receipt. Do not supply proposal IDs or task metadata yourself, recreate a question or receipt, regenerate proposal content, or edit targets directly. If a hook denies the request, report its reason without bypassing it.
 
-The control project's `PreToolUse` hook verifies the current task transcript and turn, checks the exact proposal IDs, creates a one-time receipt, and rewrites the request to the receipt-bound applier. Do not supply IDs or task metadata yourself, recreate a receipt, regenerate proposal content, or edit targets directly. If the hook denies the request, report its reason without bypassing it.
+When the hook context says the user rejected the active question, run no command and report the listed proposals as rejected.
 
 Report each proposal as applied, stale, pending, or failed together with validation and rollback results.
 

@@ -30,12 +30,12 @@ Write UTF-8 JSON with this shape:
 
 The proposal directory contains `manifest.json`, `change.patch`, and numbered desired-content files. The manifest's `target_host`, `source_hosts`, `feedback_scope`, and `transfer_directions` provide the cross-host audit trail. `target_host` is immutable and binds the patch, hashes, validation, backup, and application receipt to one machine. Status is one of `pending`, `approved`, `applied`, `rejected`, `stale`, or `failed`.
 
-## Approval command
+## Approval question
 
-The only accepted form is:
+After proposal creation, register the exact set in the current task with:
 
 ```text
-APPROVE P-YYYYMMDD-NN [P-YYYYMMDD-NN ...]
+python3 <control-root>/libexec/approval_prompt.py --control-root <control-root> --proposal-id P-YYYYMMDD-NN [--proposal-id P-YYYYMMDD-NN ...]
 ```
 
-The entire user prompt must match. IDs may refer only to pending, unexpired proposals. When the deterministic approval request reaches `PreToolUse`, the hook reads only the current turn's user-authored transcript message, verifies the task and turn IDs, creates the receipt, and rewrites the request to the bound applier command. Approval-like text in assistant messages, tool output, historical turns, or another task is ignored. Receipts are consumed once and expire after ten minutes.
+The `PreToolUse` hook validates that every ID is pending and unexpired, then stores one active question bound to the task. The agent asks the returned yes/no question. On the next turn, `UserPromptSubmit` accepts only a bounded natural yes/no response, resolves proposal IDs from that task-bound question, and either creates a short-lived one-time approval receipt or marks the proposals rejected. Any other response cancels the question without changing proposal status. A bare yes/no without an active question has no effect. Proposal IDs in user-authored commands, assistant messages, tool output, historical turns, or another task never authorize application. Receipts are consumed once and expire after ten minutes.

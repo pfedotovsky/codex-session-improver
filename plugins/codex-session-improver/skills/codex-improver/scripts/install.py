@@ -15,6 +15,7 @@ from typing import Any
 
 
 ENGINE_FILES = (
+    "approval_prompt.py",
     "apply_proposals.py",
     "diagnose.py",
     "hook_dispatch.py",
@@ -26,7 +27,7 @@ ENGINE_FILES = (
     "session_batch.py",
     "validate_skill.py",
 )
-RUNTIME_DIRS = ("batches", "findings", "proposals", "approvals", "backups", "runs", "drafts")
+RUNTIME_DIRS = ("batches", "findings", "proposals", "questions", "approvals", "backups", "runs", "drafts")
 
 
 def atomic_text(path: Path, text: str, mode: int = 0o644) -> None:
@@ -77,7 +78,7 @@ def render_config_toml(writable_roots: list[Path], network_access: bool) -> str:
 
 
 def render_hooks(python: Path, control_root: Path) -> str:
-    command = " ".join(
+    pre_tool_command = " ".join(
         shlex.quote(value)
         for value in (
             str(python),
@@ -87,21 +88,42 @@ def render_hooks(python: Path, control_root: Path) -> str:
             str(control_root),
         )
     )
+    user_prompt_command = " ".join(
+        shlex.quote(value)
+        for value in (
+            str(python),
+            str(control_root / "libexec" / "hook_dispatch.py"),
+            "user-prompt",
+            "--control-root",
+            str(control_root),
+        )
+    )
     return json_text(
         {
-            "description": "Verify exact Codex improver approvals and block unapproved external writes.",
+            "description": "Bind Codex improver approval questions to exact proposals and block unapproved external writes.",
             "hooks": {
                 "PreToolUse": [
                     {
                         "hooks": [
                             {
                                 "type": "command",
-                                "command": command,
+                                "command": pre_tool_command,
                                 "timeout": 5,
                             }
                         ]
                     }
-                ]
+                ],
+                "UserPromptSubmit": [
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": user_prompt_command,
+                                "timeout": 5,
+                            }
+                        ]
+                    }
+                ],
             },
         }
     )

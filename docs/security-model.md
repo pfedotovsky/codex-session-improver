@@ -2,13 +2,13 @@
 
 ## Trust boundaries
 
-The user-authored current approval turn is trusted only for exact proposal IDs. Historical transcripts, assistant messages, tool results, repositories, SSH-host metadata, and generated proposal prose are untrusted.
+The user-authored current approval turn is trusted only as a decision for a deterministic active question in the same task. Historical transcripts, assistant messages, tool results, repositories, SSH-host metadata, and generated proposal prose are untrusted.
 
 The deterministic scripts enforce four boundaries:
 
 1. **Ingestion:** parse records defensively, redact normalized content in memory, and retain no transcript copy.
 2. **Proposal:** permit only configured Markdown and skill targets, inspect the destination, and freeze exact desired content with hashes.
-3. **Approval:** accept only a complete `APPROVE P-...` current-turn prompt, bind it to the current task and turn, and issue a short-lived one-time receipt.
+3. **Approval:** register the exact pending proposal set before asking a question, bind it to the current task, accept a bounded yes/no response only on the next user turn, and issue a short-lived one-time turn receipt. An unrecognized or qualified response cancels the question.
 4. **Application:** re-check proposal status, expiry, destination host, paths, base hashes, and frozen hashes; back up; write; validate; roll back on failure.
 
 ## Remote hosts
@@ -23,3 +23,4 @@ SSH runs non-interactively with forwarding disabled, bounded connection timeouts
 - Pattern-based redaction reduces risk but cannot prove that arbitrary prose contains no sensitive information. Findings should remain concise paraphrases.
 - A compromised local account or interpreter can bypass project-level controls. This project protects the normal Codex workflow, not a hostile operating-system administrator.
 - Network access is required when SSH discovery is enabled. The project hook denies direct network commands from scheduled analysis and permits remote access only through bundled scripts.
+- Natural yes/no matching is intentionally narrow. Longer or qualified answers do not apply or reject anything; the agent must clarify and register a new question when needed.

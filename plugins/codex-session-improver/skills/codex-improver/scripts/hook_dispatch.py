@@ -22,8 +22,10 @@ from improver_lib import (
     load_config,
     load_manifest,
     now,
-    parse_approval,
+    parse_approval_decision,
     parse_iso,
+    question_path,
+    read_json,
     receipt_path,
     sha256_bytes,
 )
@@ -31,7 +33,7 @@ from improver_lib import (
 
 SKILL_SCRIPTS = Path(__file__).resolve().parent
 APPLIER = SKILL_SCRIPTS / "apply_proposals.py"
-APPROVAL_REQUEST_FLAG = "--from-current-approval"
+QUESTIONER = SKILL_SCRIPTS / "approval_prompt.py"
 ALLOWED_SCRIPT_NAMES = {"session_batch.py", "proposal_tool.py", "diagnose.py", "host_discovery.py"}
 READ_ONLY_COMMANDS = {"ls", "find", "rg", "sed", "jq", "stat", "test", "pwd", "head", "tail", "wc"}
 
@@ -52,21 +54,6 @@ def deny(reason: str) -> None:
     )
 
 
-def allow_rewritten(tool_input: dict[str, Any], command: str) -> None:
-    updated_input = dict(tool_input)
-    updated_input.pop("cmd", None)
-    updated_input["command"] = command
-    output(
-        {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "allow",
-                "updatedInput": updated_input,
-            }
-        }
-    )
-
-
 def pending_proposal_error(control_root: Path, proposal_ids: list[str]) -> str | None:
     invalid: list[str] = []
     for proposal_id in proposal_ids:
@@ -81,13 +68,20 @@ def pending_proposal_error(control_root: Path, proposal_ids: list[str]) -> str |
     return None
 
 
-def create_receipt(control_root: Path, session_id: str, turn_id: str, prompt: str, proposal_ids: list[str]) -> Path:
+def create_receipt(
+    control_root: Path,
+    session_id: str,
+    turn_id: str,
+    prompt: str,
+    proposal_ids: list[str],
+) -> Path:
     path = receipt_path(control_root, session_id, turn_id)
     receipt = {
         "schema_version": 1,
         "session_id": session_id,
         "turn_id": turn_id,
         "proposal_ids": proposal_ids,
+        "approval_kind": "question-response",
         "created_at": iso(),
         "expires_at": iso(now() + dt.timedelta(minutes=10)),
         "prompt_sha256": sha256_bytes(prompt.strip().encode("utf-8")),
@@ -95,6 +89,49 @@ def create_receipt(control_root: Path, session_id: str, turn_id: str, prompt: st
     }
     atomic_json(path, receipt)
     return path
+
+
+def create_question(control_root: Path, session_id: str, turn_id: str, proposal_ids: list[str]) -> Path:
+    expiries = []
+    summaries = []
+    for proposal_id in proposal_ids:
+        _, manifest = load_manifest(control_root, proposal_id)
+        expiries.append(parse_iso(manifest["expiry_at"]))
+        summaries.append({"id": proposal_id, "summary": str(manifest.get("summary", ""))[:500]})
+    value = {
+        "schema_version": 1,
+        "session_id": session_id,
+        "question_turn_id": turn_id,
+        "proposal_ids": proposal_ids,
+        "summaries": summaries,
+        "created_at": iso(),
+        "expires_at": iso(min(expiries)),
+        "status": "pending",
+        "response_turn_id": None,
+        "response_prompt_sha256": None,
+        "responded_at": None,
+    }
+    path = question_path(control_root, session_id)
+    atomic_json(path, value)
+    return path
+
+
+def active_question(control_root: Path, session_id: str) -> tuple[Path, dict[str, Any]] | None:
+    path = question_path(control_root, session_id)
+    value = read_json(path)
+    if not isinstance(value, dict) or value.get("session_id") != session_id or value.get("status") != "pending":
+        return None
+    try:
+        if parse_iso(value["expires_at"]) <= now():
+            return None
+    except Exception:
+        return None
+    proposal_ids = value.get("proposal_ids")
+    if not isinstance(proposal_ids, list) or not proposal_ids or not all(isinstance(item, str) for item in proposal_ids):
+        return None
+    if pending_proposal_error(control_root, proposal_ids):
+        return None
+    return path, value
 
 
 def input_text(payload: dict[str, Any]) -> str | None:
@@ -179,12 +216,94 @@ def applier_tokens(command: str) -> list[str] | None:
     return tokens
 
 
+def questioner_tokens(command: str) -> list[str] | None:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return None
+    if len(tokens) < 6 or not is_python_executable(tokens[0]):
+        return None
+    if Path(tokens[1]) != QUESTIONER:
+        return None
+    return tokens
+
+
 def canonical_apply_command(control_root: Path, session_id: str, turn_id: str) -> str:
     return (
         f"{shlex.quote(str(Path(sys.executable).resolve()))} {shlex.quote(str(APPLIER))} "
         f"--control-root {shlex.quote(str(control_root))} "
         f"--session-id {shlex.quote(session_id)} --turn-id {shlex.quote(turn_id)}"
     )
+
+
+def authorize_question(control_root: Path, event: dict[str, Any], command: str) -> bool:
+    tokens = questioner_tokens(command)
+    if tokens is None:
+        return False
+    normalized = [str(Path(sys.executable).resolve()), *tokens[1:]]
+    try:
+        root_matches = (
+            normalized[2] == "--control-root"
+            and Path(normalized[3]).resolve(strict=False) == control_root
+        )
+    except (IndexError, OSError, RuntimeError, ValueError):
+        root_matches = False
+    remainder = normalized[4:]
+    if not root_matches or len(remainder) % 2 or not remainder:
+        deny("The approval question command is malformed.")
+        return True
+    proposal_ids = []
+    for index in range(0, len(remainder), 2):
+        if remainder[index] != "--proposal-id" or not re.fullmatch(r"P-\d{8}-\d{2}", remainder[index + 1]):
+            deny("The approval question command is malformed.")
+            return True
+        proposal_ids.append(remainder[index + 1])
+    proposal_ids = list(dict.fromkeys(proposal_ids))
+    if not 1 <= len(proposal_ids) <= 3:
+        deny("An approval question must contain one to three proposal IDs.")
+        return True
+    proposal_error = pending_proposal_error(control_root, proposal_ids)
+    if proposal_error:
+        deny(proposal_error)
+        return True
+    session_id = str(event.get("session_id") or "")
+    turn_id = str(event.get("turn_id") or "")
+    if not session_id or not turn_id:
+        deny("Codex did not provide a session and turn ID for the approval question.")
+        return True
+    ensure_runtime(control_root)
+    create_question(control_root, session_id, turn_id, proposal_ids)
+    return True
+
+
+def valid_receipt(
+    control_root: Path,
+    session_id: str,
+    turn_id: str,
+    prompt: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    receipt = read_json(receipt_path(control_root, session_id, turn_id))
+    expected_prompt_hash = sha256_bytes(prompt.strip().encode("utf-8"))
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("session_id") != session_id
+        or receipt.get("turn_id") != turn_id
+        or receipt.get("prompt_sha256") != expected_prompt_hash
+        or receipt.get("consumed_at")
+    ):
+        return None, "A matching unconsumed approval receipt was not found for this task and turn."
+    proposal_ids = receipt.get("proposal_ids")
+    if not isinstance(proposal_ids, list) or not proposal_ids or not all(isinstance(item, str) for item in proposal_ids):
+        return None, "The approval receipt is invalid."
+    try:
+        if parse_iso(receipt["expires_at"]) <= now():
+            return None, "The approval receipt expired."
+    except Exception:
+        return None, "The approval receipt is invalid."
+    proposal_error = pending_proposal_error(control_root, proposal_ids)
+    if proposal_error:
+        return None, proposal_error
+    return receipt, None
 
 
 def authorize_apply(control_root: Path, config: dict[str, Any], event: dict[str, Any], tool_input: Any, command: str) -> bool:
@@ -202,14 +321,6 @@ def authorize_apply(control_root: Path, config: dict[str, Any], event: dict[str,
         deny(prompt_error)
         return True
     assert prompt is not None
-    proposal_ids = parse_approval(prompt)
-    if proposal_ids is None:
-        deny("The current user prompt is not an exact APPROVE command.")
-        return True
-    proposal_error = pending_proposal_error(control_root, proposal_ids)
-    if proposal_error:
-        deny(proposal_error)
-        return True
 
     normalized = [str(Path(sys.executable).resolve()), *tokens[1:]]
     root_matches = False
@@ -218,44 +329,18 @@ def authorize_apply(control_root: Path, config: dict[str, Any], event: dict[str,
             root_matches = Path(normalized[3]).resolve(strict=False) == control_root
         except (OSError, RuntimeError, ValueError):
             pass
-    is_request = len(normalized) == 5 and root_matches and normalized[4] == APPROVAL_REQUEST_FLAG
     is_direct = (
         len(normalized) == 8
         and root_matches
         and normalized[4:] == ["--session-id", session_id, "--turn-id", turn_id]
     )
-    if is_request:
-        ensure_runtime(control_root)
-        create_receipt(control_root, session_id, turn_id, prompt, proposal_ids)
-        allow_rewritten(tool_input, canonical_apply_command(control_root, session_id, turn_id))
-        return True
     if is_direct:
-        receipt = None
-        try:
-            with receipt_path(control_root, session_id, turn_id).open("r", encoding="utf-8") as handle:
-                receipt = json.load(handle)
-        except (OSError, json.JSONDecodeError):
-            pass
-        expected_prompt_hash = sha256_bytes(prompt.strip().encode("utf-8"))
-        if (
-            not isinstance(receipt, dict)
-            or receipt.get("session_id") != session_id
-            or receipt.get("turn_id") != turn_id
-            or receipt.get("proposal_ids") != proposal_ids
-            or receipt.get("prompt_sha256") != expected_prompt_hash
-            or receipt.get("consumed_at")
-        ):
-            deny("A matching unconsumed approval receipt was not found for this task and turn.")
-            return True
-        try:
-            if parse_iso(receipt["expires_at"]) <= now():
-                deny("The approval receipt expired.")
-                return True
-        except Exception:
-            deny("The approval receipt is invalid.")
+        _, receipt_error = valid_receipt(control_root, session_id, turn_id, prompt)
+        if receipt_error:
+            deny(receipt_error)
             return True
         return True
-    deny("The deterministic applier may only be invoked through the current-turn approval request.")
+    deny("The deterministic applier may only use the receipt-bound command issued after an active approval question.")
     return True
 
 
@@ -263,18 +348,71 @@ def user_prompt(control_root: Path, event: dict[str, Any]) -> int:
     prompt = event.get("prompt")
     if not isinstance(prompt, str):
         return 0
-    proposal_ids = parse_approval(prompt)
-    if proposal_ids is None:
-        return 0
-    ensure_runtime(control_root)
-    proposal_error = pending_proposal_error(control_root, proposal_ids)
-    if proposal_error:
-        output({"decision": "block", "reason": proposal_error})
-        return 0
     session_id = str(event.get("session_id") or "")
     turn_id = str(event.get("turn_id") or "")
     if not session_id or not turn_id:
-        output({"decision": "block", "reason": "Codex did not provide a session and turn ID for this approval."})
+        return 0
+    ensure_runtime(control_root)
+
+    question = active_question(control_root, session_id)
+    if question is None:
+        return 0
+    question_file, question_value = question
+    decision = parse_approval_decision(prompt)
+    if decision is None:
+        question_value.update(
+            {
+                "status": "cancelled",
+                "response_turn_id": turn_id,
+                "response_prompt_sha256": sha256_bytes(prompt.strip().encode("utf-8")),
+                "responded_at": iso(),
+            }
+        )
+        atomic_json(question_file, question_value)
+        output(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": "The user's response was not an unambiguous yes or no, so the active "
+                    "approval question is cancelled and nothing is approved or rejected. Address the user's "
+                    "message normally. Register and ask a new task-bound question before any later application.",
+                }
+            }
+        )
+        return 0
+    proposal_ids = list(question_value["proposal_ids"])
+    question_value.update(
+        {
+            "status": "approved" if decision else "rejected",
+            "response_turn_id": turn_id,
+            "response_prompt_sha256": sha256_bytes(prompt.strip().encode("utf-8")),
+            "responded_at": iso(),
+        }
+    )
+    atomic_json(question_file, question_value)
+    if not decision:
+        rejected = []
+        for proposal_id in proposal_ids:
+            manifest_path, manifest = load_manifest(control_root, proposal_id)
+            if manifest.get("status") == "pending":
+                manifest.update({"status": "rejected", "rejected_at": iso()})
+                atomic_json(manifest_path, manifest)
+                rejected.append(proposal_id)
+        output(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": "The user declined the active task-bound approval question. "
+                    f"The following proposals are now rejected and must not be applied: {', '.join(rejected)}. "
+                    "Acknowledge the decision without running the applier.",
+                }
+            }
+        )
+        return 0
+
+    proposal_error = pending_proposal_error(control_root, proposal_ids)
+    if proposal_error:
+        output({"decision": "block", "reason": proposal_error})
         return 0
     create_receipt(control_root, session_id, turn_id, prompt, proposal_ids)
     command = canonical_apply_command(control_root, session_id, turn_id)
@@ -282,7 +420,7 @@ def user_prompt(control_root: Path, event: dict[str, Any]) -> int:
         {
             "hookSpecificOutput": {
                 "hookEventName": "UserPromptSubmit",
-                "additionalContext": "The user approved exactly the proposal IDs recorded by the hook. Run this exact command once; do not edit targets directly or add IDs:\n" + command,
+                "additionalContext": "The user approved the proposal IDs bound to the active question. Run the following receipt-bound command once; do not edit targets directly or add IDs:\n" + command,
             }
         }
     )
@@ -393,6 +531,8 @@ def pre_tool(control_root: Path, config: dict[str, Any], event: dict[str, Any]) 
         command = ""
         if isinstance(tool_input, dict):
             command = str(tool_input.get("command") or tool_input.get("cmd") or "")
+        if authorize_question(control_root, event, command):
+            return 0
         if authorize_apply(control_root, config, event, tool_input, command):
             return 0
         roots = [control_root, *configured_roots(config)]

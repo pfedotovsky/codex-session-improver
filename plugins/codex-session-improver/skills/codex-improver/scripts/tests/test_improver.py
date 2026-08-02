@@ -18,7 +18,16 @@ SCRIPTS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SCRIPTS))
 TEST_SECRET = "sk-" + "abcdefghijklmnopqrstuvwxyz"
 
-from improver_lib import parse_approval, parse_session, read_json, redact_text, receipt_path, runtime_dir, validate_target
+from improver_lib import (
+    parse_approval_decision,
+    parse_session,
+    question_path,
+    read_json,
+    redact_text,
+    receipt_path,
+    runtime_dir,
+    validate_target,
+)
 from apply_proposals import apply_one
 from host_discovery import concrete_aliases, saved_remote_projects, sync_discovered_hosts
 from proposal_tool import target_snapshot
@@ -173,21 +182,25 @@ class ImproverTest(unittest.TestCase):
         path.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
         return path
 
-    def approval_request_command(self) -> str:
+    def approval_question_command(self, *proposal_ids: str) -> str:
+        suffix = " ".join(f"--proposal-id {proposal_id}" for proposal_id in proposal_ids)
         return (
-            f"{sys.executable} {SCRIPTS / 'apply_proposals.py'} "
-            f"--control-root {self.control} --from-current-approval"
+            f"{sys.executable} {SCRIPTS / 'approval_prompt.py'} "
+            f"--control-root {self.control} {suffix}"
         )
 
-    def approve(self, proposal_id: str, session_id: str = "session-a", turn_id: str = "turn-a") -> None:
-        transcript = self.write_turn_transcript(f"APPROVE {proposal_id}", session_id, turn_id)
+    def ask_approval(
+        self,
+        *proposal_ids: str,
+        session_id: str = "session-a",
+        turn_id: str = "question-turn",
+    ) -> None:
         event = {
             "session_id": session_id,
             "turn_id": turn_id,
-            "transcript_path": str(transcript),
             "hook_event_name": "PreToolUse",
             "tool_name": "Bash",
-            "tool_input": {"command": self.approval_request_command()},
+            "tool_input": {"command": self.approval_question_command(*proposal_ids)},
         }
         result = self.run_script(
             "hook_dispatch.py",
@@ -196,10 +209,21 @@ class ImproverTest(unittest.TestCase):
             str(self.control),
             input_value=event,
         )
+        self.assertEqual(result.stdout, "")
+        question = read_json(question_path(self.control, session_id))
+        self.assertEqual(question["proposal_ids"], list(proposal_ids))
+
+    def approve(self, proposal_id: str, session_id: str = "session-a", turn_id: str = "turn-a") -> None:
+        self.ask_approval(proposal_id, session_id=session_id, turn_id=f"{turn_id}-question")
+        result = self.run_script(
+            "hook_dispatch.py",
+            "user-prompt",
+            "--control-root",
+            str(self.control),
+            input_value={"prompt": "yes", "session_id": session_id, "turn_id": turn_id},
+        )
         payload = json.loads(result.stdout)
-        hook_output = payload["hookSpecificOutput"]
-        self.assertEqual(hook_output["permissionDecision"], "allow")
-        self.assertIn(f"--session-id {session_id} --turn-id {turn_id}", hook_output["updatedInput"]["command"])
+        self.assertIn(f"--session-id {session_id} --turn-id {turn_id}", payload["hookSpecificOutput"]["additionalContext"])
         receipt = read_json(receipt_path(self.control, session_id, turn_id))
         self.assertEqual(receipt["proposal_ids"], [proposal_id])
 
@@ -209,10 +233,12 @@ class ImproverTest(unittest.TestCase):
         self.assertNotIn("supersecret", value)
         self.assertNotIn("me@example.com", value)
 
-    def test_approval_syntax_is_exact(self) -> None:
-        self.assertEqual(parse_approval("APPROVE P-20260802-01 P-20260802-02"), ["P-20260802-01", "P-20260802-02"])
-        self.assertIsNone(parse_approval("Please APPROVE P-20260802-01"))
-        self.assertIsNone(parse_approval("APPROVE P-20260802-1"))
+    def test_natural_approval_decisions_are_bounded(self) -> None:
+        self.assertIs(parse_approval_decision("Аппрувлю эту правку"), True)
+        self.assertIs(parse_approval_decision("yes!"), True)
+        self.assertIs(parse_approval_decision("Нет"), False)
+        self.assertIsNone(parse_approval_decision("yes, but change the target"))
+        self.assertIsNone(parse_approval_decision("APPROVE P-20260802-01"))
 
     def test_parser_tolerates_unknown_and_truncated_records(self) -> None:
         path = self.write_session()
@@ -485,6 +511,206 @@ class ImproverTest(unittest.TestCase):
         receipt = read_json(receipt_path(self.control, "session-a", "turn-a"))
         self.assertIsNotNone(receipt["consumed_at"])
 
+    def test_task_bound_question_accepts_natural_yes_and_applies(self) -> None:
+        target = self.project / "natural.md"
+        target.write_text("before\n", encoding="utf-8")
+        proposal_id = self.proposal_id(
+            self.run_script(
+                "proposal_tool.py",
+                "create",
+                "--control-root",
+                str(self.control),
+                "--draft",
+                str(self.create_draft(target, "after\n")),
+            ).stdout
+        )
+        self.ask_approval(proposal_id)
+        rendered = self.run_script(
+            "approval_prompt.py",
+            "--control-root",
+            str(self.control),
+            "--proposal-id",
+            proposal_id,
+        )
+        self.assertIn("Reply yes or no", json.loads(rendered.stdout)["question"])
+
+        prompt = "Аппрувлю эту правку"
+        hook = self.run_script(
+            "hook_dispatch.py",
+            "user-prompt",
+            "--control-root",
+            str(self.control),
+            input_value={"prompt": prompt, "session_id": "session-a", "turn_id": "answer-turn"},
+        )
+        context = json.loads(hook.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("--session-id session-a --turn-id answer-turn", context)
+        receipt = read_json(receipt_path(self.control, "session-a", "answer-turn"))
+        self.assertEqual(receipt["proposal_ids"], [proposal_id])
+        self.assertEqual(receipt["approval_kind"], "question-response")
+
+        transcript = self.write_turn_transcript(prompt, "session-a", "answer-turn")
+        direct = (
+            f"{sys.executable} {SCRIPTS / 'apply_proposals.py'} "
+            f"--control-root {self.control} --session-id session-a --turn-id answer-turn"
+        )
+        authorized = self.run_script(
+            "hook_dispatch.py",
+            "pre-tool",
+            "--control-root",
+            str(self.control),
+            input_value={
+                "session_id": "session-a",
+                "turn_id": "answer-turn",
+                "transcript_path": str(transcript),
+                "tool_name": "Bash",
+                "tool_input": {"command": direct},
+            },
+        )
+        self.assertEqual(authorized.stdout, "")
+        applied = self.run_script(
+            "apply_proposals.py",
+            "--control-root",
+            str(self.control),
+            "--session-id",
+            "session-a",
+            "--turn-id",
+            "answer-turn",
+        )
+        self.assertEqual(json.loads(applied.stdout)["results"][0]["status"], "applied")
+        self.assertEqual(target.read_text(encoding="utf-8"), "after\n")
+
+    def test_task_bound_question_rejects_on_natural_no(self) -> None:
+        target = self.project / "rejected.md"
+        target.write_text("before\n", encoding="utf-8")
+        proposal_id = self.proposal_id(
+            self.run_script(
+                "proposal_tool.py",
+                "create",
+                "--control-root",
+                str(self.control),
+                "--draft",
+                str(self.create_draft(target, "after\n")),
+            ).stdout
+        )
+        self.ask_approval(proposal_id)
+        hook = self.run_script(
+            "hook_dispatch.py",
+            "user-prompt",
+            "--control-root",
+            str(self.control),
+            input_value={"prompt": "нет", "session_id": "session-a", "turn_id": "answer-turn"},
+        )
+        self.assertIn("must not be applied", json.loads(hook.stdout)["hookSpecificOutput"]["additionalContext"])
+        manifest = read_json(runtime_dir(self.control) / "proposals" / proposal_id / "manifest.json")
+        self.assertEqual(manifest["status"], "rejected")
+        self.assertEqual(target.read_text(encoding="utf-8"), "before\n")
+        self.assertFalse(receipt_path(self.control, "session-a", "answer-turn").exists())
+
+    def test_natural_yes_without_task_bound_question_is_ignored(self) -> None:
+        result = self.run_script(
+            "hook_dispatch.py",
+            "user-prompt",
+            "--control-root",
+            str(self.control),
+            input_value={"prompt": "yes", "session_id": "session-a", "turn_id": "answer-turn"},
+        )
+        self.assertEqual(result.stdout, "")
+        self.assertFalse(receipt_path(self.control, "session-a", "answer-turn").exists())
+
+    def test_natural_yes_cannot_approve_another_tasks_question(self) -> None:
+        target = self.project / "cross-task.md"
+        target.write_text("before\n", encoding="utf-8")
+        proposal_id = self.proposal_id(
+            self.run_script(
+                "proposal_tool.py",
+                "create",
+                "--control-root",
+                str(self.control),
+                "--draft",
+                str(self.create_draft(target, "after\n")),
+            ).stdout
+        )
+        self.ask_approval(proposal_id, session_id="session-a")
+        result = self.run_script(
+            "hook_dispatch.py",
+            "user-prompt",
+            "--control-root",
+            str(self.control),
+            input_value={"prompt": "yes", "session_id": "session-b", "turn_id": "answer-turn"},
+        )
+        self.assertEqual(result.stdout, "")
+        self.assertFalse(receipt_path(self.control, "session-b", "answer-turn").exists())
+
+    def test_qualified_answer_cancels_question_instead_of_approving_later_yes(self) -> None:
+        target = self.project / "qualified.md"
+        target.write_text("before\n", encoding="utf-8")
+        proposal_id = self.proposal_id(
+            self.run_script(
+                "proposal_tool.py",
+                "create",
+                "--control-root",
+                str(self.control),
+                "--draft",
+                str(self.create_draft(target, "after\n")),
+            ).stdout
+        )
+        self.ask_approval(proposal_id)
+        ambiguous = self.run_script(
+            "hook_dispatch.py",
+            "user-prompt",
+            "--control-root",
+            str(self.control),
+            input_value={
+                "prompt": "yes, but change the target",
+                "session_id": "session-a",
+                "turn_id": "ambiguous-turn",
+            },
+        )
+        self.assertIn("question is cancelled", json.loads(ambiguous.stdout)["hookSpecificOutput"]["additionalContext"])
+        question = read_json(question_path(self.control, "session-a"))
+        self.assertEqual(question["status"], "cancelled")
+
+        later = self.run_script(
+            "hook_dispatch.py",
+            "user-prompt",
+            "--control-root",
+            str(self.control),
+            input_value={"prompt": "yes", "session_id": "session-a", "turn_id": "later-turn"},
+        )
+        self.assertEqual(later.stdout, "")
+        self.assertFalse(receipt_path(self.control, "session-a", "later-turn").exists())
+        self.assertEqual(target.read_text(encoding="utf-8"), "before\n")
+
+    def test_removed_approval_command_cancels_active_question(self) -> None:
+        target = self.project / "asked.md"
+        target.write_text("before\n", encoding="utf-8")
+        proposal_id = self.proposal_id(
+            self.run_script(
+                "proposal_tool.py",
+                "create",
+                "--control-root",
+                str(self.control),
+                "--draft",
+                str(self.create_draft(target, "after\n")),
+            ).stdout
+        )
+        self.ask_approval(proposal_id)
+        removed = self.run_script(
+            "hook_dispatch.py",
+            "user-prompt",
+            "--control-root",
+            str(self.control),
+            input_value={
+                "prompt": f"APPROVE {proposal_id}",
+                "session_id": "session-a",
+                "turn_id": "removed-command-turn",
+            },
+        )
+        self.assertIn("question is cancelled", json.loads(removed.stdout)["hookSpecificOutput"]["additionalContext"])
+        question = read_json(question_path(self.control, "session-a"))
+        self.assertEqual(question["status"], "cancelled")
+        self.assertFalse(receipt_path(self.control, "session-a", "removed-command-turn").exists())
+
     def test_hash_mismatch_marks_stale_without_writing(self) -> None:
         target = self.project / "AGENTS.md"
         target.write_text("before\n", encoding="utf-8")
@@ -527,26 +753,23 @@ class ImproverTest(unittest.TestCase):
         self.assertEqual(target.read_text(encoding="utf-8"), "---\nname: bad-skill\ndescription: valid\n---\n")
         self.assertEqual(json.loads(applied.stdout)["results"][0]["status"], "failed")
 
-    def test_unknown_approval_is_rejected(self) -> None:
-        transcript = self.write_turn_transcript("APPROVE P-20260802-99", "s", "t")
+    def test_removed_approval_command_without_question_is_ignored(self) -> None:
         result = self.run_script(
             "hook_dispatch.py",
-            "pre-tool",
+            "user-prompt",
             "--control-root",
             str(self.control),
-            input_value={
-                "session_id": "s",
-                "turn_id": "t",
-                "transcript_path": str(transcript),
-                "tool_name": "Bash",
-                "tool_input": {"command": self.approval_request_command()},
-            },
+            input_value={"prompt": "APPROVE P-20260802-99", "session_id": "s", "turn_id": "t"},
         )
-        self.assertIn('"permissionDecision": "deny"', result.stdout)
+        self.assertEqual(result.stdout, "")
         self.assertFalse(receipt_path(self.control, "s", "t").exists())
 
-    def test_pretool_rejects_nonapproval_current_prompt(self) -> None:
-        transcript = self.write_turn_transcript("Please apply APPROVE P-20260802-01", "s", "t")
+    def test_pretool_rejects_removed_current_approval_flag(self) -> None:
+        transcript = self.write_turn_transcript("yes", "s", "t")
+        removed_command = (
+            f"{sys.executable} {SCRIPTS / 'apply_proposals.py'} "
+            f"--control-root {self.control} --from-current-approval"
+        )
         result = self.run_script(
             "hook_dispatch.py",
             "pre-tool",
@@ -557,14 +780,18 @@ class ImproverTest(unittest.TestCase):
                 "turn_id": "t",
                 "transcript_path": str(transcript),
                 "tool_name": "Bash",
-                "tool_input": {"command": self.approval_request_command()},
+                "tool_input": {"command": removed_command},
             },
         )
-        self.assertIn("not an exact APPROVE command", result.stdout)
+        self.assertIn("receipt-bound command issued after an active approval question", result.stdout)
         self.assertFalse(receipt_path(self.control, "s", "t").exists())
 
     def test_pretool_rejects_cross_task_transcript(self) -> None:
-        transcript = self.write_turn_transcript("APPROVE P-20260802-01", "other-session", "t")
+        transcript = self.write_turn_transcript("yes", "other-session", "t")
+        direct = (
+            f"{sys.executable} {SCRIPTS / 'apply_proposals.py'} "
+            f"--control-root {self.control} --session-id s --turn-id t"
+        )
         result = self.run_script(
             "hook_dispatch.py",
             "pre-tool",
@@ -575,7 +802,7 @@ class ImproverTest(unittest.TestCase):
                 "turn_id": "t",
                 "transcript_path": str(transcript),
                 "tool_name": "Bash",
-                "tool_input": {"command": self.approval_request_command()},
+                "tool_input": {"command": direct},
             },
         )
         self.assertIn("another task", result.stdout)
@@ -594,7 +821,7 @@ class ImproverTest(unittest.TestCase):
                 str(self.create_draft(target, "after\n")),
             ).stdout
         )
-        transcript = self.write_turn_transcript(f"APPROVE {proposal_id}", "s", "t")
+        transcript = self.write_turn_transcript("yes", "s", "t")
         direct = (
             f"{sys.executable} {SCRIPTS / 'apply_proposals.py'} "
             f"--control-root {self.control} --session-id s --turn-id t"
@@ -614,8 +841,8 @@ class ImproverTest(unittest.TestCase):
         )
         self.assertIn("matching unconsumed approval receipt", result.stdout)
 
-    def test_pretool_allows_receipt_bound_direct_apply_for_loaded_legacy_hook(self) -> None:
-        target = self.project / "legacy.md"
+    def test_pretool_allows_receipt_bound_direct_apply_after_question(self) -> None:
+        target = self.project / "question.md"
         target.write_text("before\n", encoding="utf-8")
         proposal_id = self.proposal_id(
             self.run_script(
@@ -627,15 +854,17 @@ class ImproverTest(unittest.TestCase):
                 str(self.create_draft(target, "after\n")),
             ).stdout
         )
-        prompt = f"APPROVE {proposal_id}"
+        self.ask_approval(proposal_id, session_id="s")
+        prompt = "yes"
         transcript = self.write_turn_transcript(prompt, "s", "t")
-        self.run_script(
+        prompt_result = self.run_script(
             "hook_dispatch.py",
             "user-prompt",
             "--control-root",
             str(self.control),
             input_value={"prompt": prompt, "session_id": "s", "turn_id": "t"},
         )
+        self.assertIn("receipt-bound command once", json.loads(prompt_result.stdout)["hookSpecificOutput"]["additionalContext"])
         direct = (
             f"{sys.executable} {SCRIPTS / 'apply_proposals.py'} "
             f"--control-root {self.control} --session-id s --turn-id t"
@@ -656,7 +885,11 @@ class ImproverTest(unittest.TestCase):
         self.assertEqual(result.stdout, "")
 
     def test_assistant_approval_text_is_not_treated_as_user_approval(self) -> None:
-        transcript = self.write_turn_transcript("Review the proposal", "s", "t", "APPROVE P-20260802-01")
+        transcript = self.write_turn_transcript("Review the proposal", "s", "t", "yes")
+        direct = (
+            f"{sys.executable} {SCRIPTS / 'apply_proposals.py'} "
+            f"--control-root {self.control} --session-id s --turn-id t"
+        )
         result = self.run_script(
             "hook_dispatch.py",
             "pre-tool",
@@ -667,10 +900,10 @@ class ImproverTest(unittest.TestCase):
                 "turn_id": "t",
                 "transcript_path": str(transcript),
                 "tool_name": "Bash",
-                "tool_input": {"command": self.approval_request_command()},
+                "tool_input": {"command": direct},
             },
         )
-        self.assertIn("not an exact APPROVE command", result.stdout)
+        self.assertIn("matching unconsumed approval receipt", result.stdout)
 
     def test_pretool_allows_drafts_and_denies_control_or_external_writes(self) -> None:
         allowed_patch = {

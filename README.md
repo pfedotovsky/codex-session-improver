@@ -69,11 +69,13 @@ Rollback:    Restore the pre-apply backup if validation fails
 +- Search for files with `rg --files` before using broader filesystem scans.
 ```
 
-The proposal also records the target's base SHA-256 hash. To apply the frozen diff, reply in that proposal task with its exact ID:
+The proposal also records the target's base SHA-256 hash. After showing the proposal, the agent asks a normal question:
 
 ```text
-APPROVE P-20260803-01
+Apply the frozen proposal P-20260803-01? Reply yes or no.
 ```
+
+Reply naturally with `yes` / `no` (or the equivalent in your language). You do not need to copy an ID or type a command. The question is bound to the exact proposal set and the current task before it is shown, and only the next user response can answer it. A qualified answer cancels the question so the agent can clarify safely.
 
 Changed targets make a proposal stale instead of silently rebasing it. Failed validation restores every file included in that proposal.
 
@@ -92,10 +94,10 @@ Session viewers, memory systems, and reflection prompts already exist. This proj
 - Findings are redacted before persistence or SSH transfer.
 - Transcript content is untrusted data, never executable instructions.
 - Proposals freeze their content and record base SHA-256 hashes.
-- Every change requires an exact, task-bound approval.
+- Every change requires a proposal-bound question and a task-bound approval receipt.
 - Validation, backups, and rollback protect each approved proposal.
 
-Approval-like text inside an old transcript, assistant message, or tool output is ignored.
+Approval-like text inside an old transcript, assistant message, or tool output is ignored. A bare `yes` or `no` outside an active question has no effect.
 
 ### Supported automatic targets
 
@@ -130,9 +132,10 @@ This path installs a standalone skill under `~/.agents/skills/codex-improver`. U
 
 1. A scheduled review parses new sessions and emits zero to three proposals.
 2. Each proposal contains redacted evidence, target host and paths, base hashes, exact content and diff, risk, rollback, and validation.
-3. Reply in that proposal task with one exact command: `APPROVE P-... [P-...]`.
-4. The project hook binds the approval to that task and turn and rewrites the request to the deterministic applier.
-5. Changed targets become stale. Failed validation restores every file in that proposal.
+3. The agent registers the exact proposal set and asks whether to apply it.
+4. Reply naturally with yes or no. The `UserPromptSubmit` hook resolves that answer only against the active question in the same task; “no” rejects the listed proposals.
+5. On “yes”, the hook creates a short-lived turn receipt and instructs the deterministic applier.
+6. Changed targets become stale. Failed validation restores every file in that proposal.
 
 ## Remote discovery
 

@@ -15,7 +15,40 @@ from typing import Any, Iterable
 
 UTC = dt.timezone.utc
 PROPOSAL_ID_RE = re.compile(r"P-\d{8}-\d{2}")
-APPROVAL_RE = re.compile(r"APPROVE (P-\d{8}-\d{2})(?: (P-\d{8}-\d{2}))*")
+YES_RESPONSES = {
+    "yes",
+    "y",
+    "i approve",
+    "approve",
+    "approve it",
+    "approved",
+    "apply",
+    "apply it",
+    "ok",
+    "okay",
+    "да",
+    "ага",
+    "одобряю",
+    "одобряю эту правку",
+    "аппрувлю",
+    "аппрувлю эту правку",
+    "подтверждаю",
+    "применить",
+    "применяй",
+}
+NO_RESPONSES = {
+    "no",
+    "n",
+    "decline",
+    "decline it",
+    "reject",
+    "reject it",
+    "нет",
+    "не применять",
+    "не применяй",
+    "отклонить",
+    "отклоняю",
+}
 SECRET_PATTERNS = [
     re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
     re.compile(r"\b(?:gh[opusr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
@@ -121,7 +154,7 @@ def runtime_dir(control_root: Path) -> Path:
 
 
 def ensure_runtime(control_root: Path) -> None:
-    for name in ("batches", "findings", "proposals", "approvals", "backups", "runs", "drafts"):
+    for name in ("batches", "findings", "proposals", "questions", "approvals", "backups", "runs", "drafts"):
         (runtime_dir(control_root) / name).mkdir(parents=True, exist_ok=True)
 
 
@@ -247,12 +280,18 @@ def load_manifest(control_root: Path, proposal_id: str) -> tuple[Path, dict[str,
     return path, manifest
 
 
-def parse_approval(prompt: str) -> list[str] | None:
-    normalized = prompt.strip()
-    if not re.fullmatch(r"APPROVE P-\d{8}-\d{2}(?: P-\d{8}-\d{2})*", normalized):
-        return None
-    ids = normalized.split()[1:]
-    return list(dict.fromkeys(ids))
+def parse_approval_decision(prompt: str) -> bool | None:
+    normalized = re.sub(r"\s+", " ", prompt.strip().casefold()).strip(" .,!?")
+    if normalized in YES_RESPONSES:
+        return True
+    if normalized in NO_RESPONSES:
+        return False
+    return None
+
+
+def question_path(control_root: Path, session_id: str) -> Path:
+    key = sha256_bytes(session_id.encode())[:32]
+    return runtime_dir(control_root) / "questions" / f"{key}.json"
 
 
 def receipt_path(control_root: Path, session_id: str, turn_id: str) -> Path:

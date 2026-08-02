@@ -54,6 +54,7 @@ class InstallerTest(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["status"], "installed")
         self.assertTrue(payload["hook_trust_required"])
+        self.assertTrue((self.control / "libexec" / "approval_prompt.py").is_file())
         self.assertTrue((self.control / "libexec" / "apply_proposals.py").is_file())
         self.assertTrue((self.control / ".codex" / "hooks.json").is_file())
         self.assertTrue((self.control / "automation-prompt.md").is_file())
@@ -73,6 +74,9 @@ class InstallerTest(unittest.TestCase):
         hook = json.loads((self.control / ".codex" / "hooks.json").read_text(encoding="utf-8"))
         command = hook["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
         self.assertIn(str(self.control / "libexec" / "hook_dispatch.py"), command)
+        prompt_command = hook["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+        self.assertIn("user-prompt", prompt_command)
+        self.assertIn(str(self.control / "libexec" / "hook_dispatch.py"), prompt_command)
         skill = self.home / ".agents" / "skills" / "codex-improver"
         self.assertTrue((skill / "SKILL.md").is_file())
         self.assertFalse((skill / "scripts" / "tests").exists())

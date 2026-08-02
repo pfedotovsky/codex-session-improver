@@ -1,6 +1,6 @@
 {
   "name": "codex-session-improver",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20260802204355",
   "description": "Turn local and remote Codex session evidence into redacted, reviewable, approval-gated instruction and skill patches.",
   "author": {
     "name": "Pavel Fedotovsky",
@@ -9,7 +9,14 @@
   "homepage": "https://github.com/pfedotovsky/codex-session-improver",
   "repository": "https://github.com/pfedotovsky/codex-session-improver",
   "license": "Apache-2.0",
-  "keywords": ["codex", "sessions", "agents-md", "skills", "automation", "ssh"],
+  "keywords": [
+    "codex",
+    "sessions",
+    "agents-md",
+    "skills",
+    "automation",
+    "ssh"
+  ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Codex Session Improver",
@@ -17,7 +24,10 @@
     "longDescription": "Analyze settled Codex sessions on one controller and its SSH hosts, retain only redacted findings, and propose exact AGENTS.md, skill, or Markdown patches for explicit approval.",
     "developerName": "Pavel Fedotovsky",
     "category": "Productivity",
-    "capabilities": ["Interactive", "Write"],
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
     "defaultPrompt": "Use $codex-improver to run the next safety-gated session review now. Analyze only; do not apply proposals."
   }
 }
