@@ -1,0 +1,28 @@
+{
+  "schema_version": 3,
+  "control_root": "/Users/example/projects/codex-improver",
+  "sessions_root": "/Users/example/.codex/sessions",
+  "bootstrap_days": 7,
+  "settle_seconds": 300,
+  "retention_days": 90,
+  "proposal_expiry_days": 14,
+  "approval_expiry_minutes": 10,
+  "max_sessions_per_run": 8,
+  "max_proposals_per_run": 3,
+  "writable_roots": [
+    "/Users/example/.codex",
+    "/Users/example/projects"
+  ],
+  "excluded_cwds": [
+    "/Users/example/projects/codex-improver"
+  ],
+  "remote_hosts": [],
+  "remote_auto_discovery": {
+    "enabled": true,
+    "ssh_config": "/Users/example/.ssh/config",
+    "app_state": "/Users/example/.codex/.codex-global-state.json",
+    "python_command": "python3",
+    "max_hosts": 20,
+    "probe_timeout_seconds": 12
+  }
+}

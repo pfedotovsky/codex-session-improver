@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Engine tests
+        run: python -m unittest discover -s plugins/codex-session-improver/skills/codex-improver/scripts/tests -v
+      - name: Installer tests
+        run: python -m unittest discover -s tests -v
+      - name: Validate bundled skill
+        run: python plugins/codex-session-improver/skills/codex-improver/scripts/validate_skill.py plugins/codex-session-improver/skills/codex-improver
+      - name: Validate JSON manifests
+        run: |
+          python -m json.tool plugins/codex-session-improver/.codex-plugin/plugin.json >/dev/null
+          python -m json.tool .agents/plugins/marketplace.json >/dev/null
+          python -m json.tool config.example.json >/dev/null
+      - name: Scan public tree
+        run: python scripts/check_public_tree.py

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Improver"
+  short_description: "Safely improve Codex from session evidence"
+  default_prompt: "Use $codex-improver to set up or run a safety-gated review of local and remote Codex sessions."
