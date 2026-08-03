@@ -66,17 +66,17 @@ Resolve `<skill-root>` as the directory containing this `SKILL.md`. Resolve `<co
    python3 <control-root>/libexec/approval_prompt.py --control-root <control-root> --proposal-id P-... [--proposal-id P-...]
    ```
 
-   Copy the returned question faithfully, translate it to the user's language if needed, make clear that “no” rejects the listed proposals, and end the turn by asking it. Do not ask the user to type a command or retype proposal IDs.
+   Copy the returned question block faithfully and translate it to the user's language if needed. When there are multiple proposals, keep each numbered yes/no question on its own line so the user can approve or reject proposals independently in one reply. Preserve the response example and order, and end with the final direct question. Do not append text after the question mark, ask the user to type a command, or ask them to retype proposal IDs.
 
 Do not edit targets during analysis. Do not broaden target roots, discovery sources, or script allowlists during a scheduled run. Never persist raw or normalized transcripts. Raw remote transcript content must not leave its host.
 
 ## Handle an approval answer
 
-When the `UserPromptSubmit` hook confirms that the current answer approved an active task-bound question, run the receipt-bound command supplied by the hook once. A short natural answer such as “yes”, “да”, or “Аппрувлю эту правку” is valid only when that hook context is present.
+When the `UserPromptSubmit` hook confirms that the current answer approved at least one active task-bound question, run the receipt-bound command supplied by the hook once. For one proposal, a short natural answer such as “yes”, “да”, or “Аппрувлю эту правку” is valid only when that hook context is present. For multiple proposals, the user answers every numbered question independently in one reply; only the approved subset is included in the receipt.
 
 The control project's hooks bind the natural answer to the active question in the same task and create a one-time turn receipt. Do not supply proposal IDs or task metadata yourself, recreate a question or receipt, regenerate proposal content, or edit targets directly. If a hook denies the request, report its reason without bypassing it.
 
-When the hook context says the user rejected the active question, run no command and report the listed proposals as rejected.
+When the hook context says the user rejected every active question, run no command and report the listed proposals as rejected. For a mixed answer, run the supplied receipt-bound command once for the approved subset and report the rejected subset without applying it.
 
 Report each proposal as applied, stale, pending, or failed together with validation and rollback results.
 

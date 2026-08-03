@@ -22,7 +22,7 @@ from improver_lib import (
     load_config,
     load_manifest,
     now,
-    parse_approval_decision,
+    parse_approval_decisions,
     parse_iso,
     question_path,
     read_json,
@@ -358,8 +358,9 @@ def user_prompt(control_root: Path, event: dict[str, Any]) -> int:
     if question is None:
         return 0
     question_file, question_value = question
-    decision = parse_approval_decision(prompt)
-    if decision is None:
+    proposal_ids = list(question_value["proposal_ids"])
+    decisions = parse_approval_decisions(prompt, len(proposal_ids))
+    if decisions is None:
         question_value.update(
             {
                 "status": "cancelled",
@@ -373,31 +374,38 @@ def user_prompt(control_root: Path, event: dict[str, Any]) -> int:
             {
                 "hookSpecificOutput": {
                     "hookEventName": "UserPromptSubmit",
-                    "additionalContext": "The user's response was not an unambiguous yes or no, so the active "
-                    "approval question is cancelled and nothing is approved or rejected. Address the user's "
-                    "message normally. Register and ask a new task-bound question before any later application.",
+                    "additionalContext": "The user's response did not contain one unambiguous yes/no decision "
+                    "for every active proposal question, so the approval question is cancelled and nothing is "
+                    "approved or rejected. Address the user's message normally. Register and ask a new task-bound "
+                    "question before any later application.",
                 }
             }
         )
         return 0
-    proposal_ids = list(question_value["proposal_ids"])
+    approved_ids = [proposal_id for proposal_id, decision in zip(proposal_ids, decisions) if decision]
+    rejected_ids = [proposal_id for proposal_id, decision in zip(proposal_ids, decisions) if not decision]
+    status = "approved" if not rejected_ids else ("rejected" if not approved_ids else "partially-approved")
     question_value.update(
         {
-            "status": "approved" if decision else "rejected",
+            "status": status,
+            "decisions": [
+                {"proposal_id": proposal_id, "approved": decision}
+                for proposal_id, decision in zip(proposal_ids, decisions)
+            ],
             "response_turn_id": turn_id,
             "response_prompt_sha256": sha256_bytes(prompt.strip().encode("utf-8")),
             "responded_at": iso(),
         }
     )
     atomic_json(question_file, question_value)
-    if not decision:
-        rejected = []
-        for proposal_id in proposal_ids:
-            manifest_path, manifest = load_manifest(control_root, proposal_id)
-            if manifest.get("status") == "pending":
-                manifest.update({"status": "rejected", "rejected_at": iso()})
-                atomic_json(manifest_path, manifest)
-                rejected.append(proposal_id)
+    rejected = []
+    for proposal_id in rejected_ids:
+        manifest_path, manifest = load_manifest(control_root, proposal_id)
+        if manifest.get("status") == "pending":
+            manifest.update({"status": "rejected", "rejected_at": iso()})
+            atomic_json(manifest_path, manifest)
+            rejected.append(proposal_id)
+    if not approved_ids:
         output(
             {
                 "hookSpecificOutput": {
@@ -410,17 +418,20 @@ def user_prompt(control_root: Path, event: dict[str, Any]) -> int:
         )
         return 0
 
-    proposal_error = pending_proposal_error(control_root, proposal_ids)
+    proposal_error = pending_proposal_error(control_root, approved_ids)
     if proposal_error:
         output({"decision": "block", "reason": proposal_error})
         return 0
-    create_receipt(control_root, session_id, turn_id, prompt, proposal_ids)
+    create_receipt(control_root, session_id, turn_id, prompt, approved_ids)
     command = canonical_apply_command(control_root, session_id, turn_id)
+    rejected_context = f" Rejected proposals: {', '.join(rejected)}." if rejected else ""
     output(
         {
             "hookSpecificOutput": {
                 "hookEventName": "UserPromptSubmit",
-                "additionalContext": "The user approved the proposal IDs bound to the active question. Run the following receipt-bound command once; do not edit targets directly or add IDs:\n" + command,
+                "additionalContext": "The user approved these proposal IDs from the active task-bound questions: "
+                f"{', '.join(approved_ids)}.{rejected_context} Run the following receipt-bound command once; "
+                "do not edit targets directly or add IDs:\n" + command,
             }
         }
     )

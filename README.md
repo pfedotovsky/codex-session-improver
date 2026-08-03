@@ -90,10 +90,12 @@ Rollback:    Restore the pre-apply backup if validation fails
 The proposal also records the target's base SHA-256 hash. After showing the proposal, the agent asks a normal question:
 
 ```text
-Apply the frozen proposal P-20260803-01? Reply yes or no.
+Reply yes to apply it or no to reject it. Would you like to apply the frozen proposal P-20260803-01?
 ```
 
 Reply naturally with `yes` / `no` (or the equivalent in your language). You do not need to copy an ID or type a command. The question is bound to the exact proposal set and the current task before it is shown, and only the next user response can answer it. A qualified answer cancels the question so the agent can clarify safely.
+
+When a review creates multiple proposals, each proposal gets its own numbered yes/no question. Answer all of them in one reply, for example `1 yes, 2 yes, 3 no`; only the approved subset receives an application receipt.
 
 Changed targets make a proposal stale instead of silently rebasing it. Failed validation restores every file included in that proposal.
 
@@ -151,7 +153,7 @@ This path installs a standalone skill under `~/.agents/skills/codex-improver`. U
 1. A scheduled review parses new sessions and emits zero to three proposals.
 2. Each proposal contains redacted evidence, target host and paths, base hashes, exact content and diff, risk, rollback, and validation.
 3. The agent registers the exact proposal set and asks whether to apply it.
-4. Reply naturally with yes or no. The `UserPromptSubmit` hook resolves that answer only against the active question in the same task; “no” rejects the listed proposals.
+4. Reply naturally with yes or no. For multiple proposals, answer every numbered question independently in one reply. The `UserPromptSubmit` hook resolves the decisions only against the active question block in the same task and applies only the approved subset.
 5. On “yes”, the hook creates a short-lived turn receipt and instructs the deterministic applier.
 6. Changed targets become stale. Failed validation restores every file in that proposal.
 

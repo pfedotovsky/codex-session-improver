@@ -20,6 +20,7 @@ TEST_SECRET = "sk-" + "abcdefghijklmnopqrstuvwxyz"
 
 from improver_lib import (
     parse_approval_decision,
+    parse_approval_decisions,
     parse_session,
     question_path,
     read_json,
@@ -239,6 +240,13 @@ class ImproverTest(unittest.TestCase):
         self.assertIs(parse_approval_decision("Нет"), False)
         self.assertIsNone(parse_approval_decision("yes, but change the target"))
         self.assertIsNone(parse_approval_decision("APPROVE P-20260802-01"))
+
+    def test_independent_approval_language_is_bounded_and_ordered(self) -> None:
+        self.assertEqual(parse_approval_decisions("1 — да, 2 yes, 3: нет", 3), [True, True, False])
+        self.assertEqual(parse_approval_decisions("yes\nno\nyes", 3), [True, False, True])
+        self.assertIsNone(parse_approval_decisions("1 yes, 3 no, 2 yes", 3))
+        self.assertIsNone(parse_approval_decisions("1 yes, 2 no", 3))
+        self.assertIsNone(parse_approval_decisions("1 yes, 2 no, 3 yes but edit it", 3))
 
     def test_parser_tolerates_unknown_and_truncated_records(self) -> None:
         path = self.write_session()
@@ -700,7 +708,12 @@ class ImproverTest(unittest.TestCase):
             "--proposal-id",
             proposal_id,
         )
-        self.assertIn("Reply yes or no", json.loads(rendered.stdout)["question"])
+        question = json.loads(rendered.stdout)["question"]
+        self.assertIn("Reply yes to apply it or no to reject it.", question)
+        self.assertEqual(
+            question,
+            f"Reply yes to apply it or no to reject it. Would you like to apply the frozen proposal {proposal_id}?",
+        )
 
         prompt = "Аппрувлю эту правку"
         hook = self.run_script(
@@ -746,6 +759,113 @@ class ImproverTest(unittest.TestCase):
         )
         self.assertEqual(json.loads(applied.stdout)["results"][0]["status"], "applied")
         self.assertEqual(target.read_text(encoding="utf-8"), "after\n")
+
+    def test_multi_proposal_prompt_ends_with_a_direct_question(self) -> None:
+        proposal_ids = []
+        for index in range(3):
+            target = self.project / f"proposal-{index}.md"
+            target.write_text("before\n", encoding="utf-8")
+            created = self.run_script(
+                "proposal_tool.py",
+                "create",
+                "--control-root",
+                str(self.control),
+                "--draft",
+                str(self.create_draft(target, "after\n")),
+            )
+            proposal_ids.append(self.proposal_id(created.stdout))
+
+        rendered = self.run_script(
+            "approval_prompt.py",
+            "--control-root",
+            str(self.control),
+            *(argument for proposal_id in proposal_ids for argument in ("--proposal-id", proposal_id)),
+        )
+        question = json.loads(rendered.stdout)["question"]
+        example = ", ".join(
+            f"{index} {'yes' if index < len(proposal_ids) else 'no'}"
+            for index in range(1, len(proposal_ids) + 1)
+        )
+        self.assertEqual(
+            question,
+            f"Answer each question independently in one reply (for example: {example}).\n"
+            + "\n".join(
+                f"{index}. Would you like to apply the frozen proposal {proposal_id}?"
+                for index, proposal_id in enumerate(proposal_ids, 1)
+            ),
+        )
+        self.assertTrue(question.endswith("?"))
+
+    def test_task_bound_questions_apply_only_individually_approved_proposals(self) -> None:
+        proposal_ids = []
+        targets = []
+        for index in range(3):
+            target = self.project / f"partial-{index}.md"
+            target.write_text("before\n", encoding="utf-8")
+            targets.append(target)
+            created = self.run_script(
+                "proposal_tool.py",
+                "create",
+                "--control-root",
+                str(self.control),
+                "--draft",
+                str(self.create_draft(target, "after\n")),
+            )
+            proposal_ids.append(self.proposal_id(created.stdout))
+
+        self.ask_approval(*proposal_ids)
+        prompt = "1 да, 2 нет, 3 yes"
+        hook = self.run_script(
+            "hook_dispatch.py",
+            "user-prompt",
+            "--control-root",
+            str(self.control),
+            input_value={"prompt": prompt, "session_id": "session-a", "turn_id": "partial-turn"},
+        )
+        context = json.loads(hook.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn(f"{proposal_ids[0]}, {proposal_ids[2]}", context)
+        self.assertIn(f"Rejected proposals: {proposal_ids[1]}", context)
+        receipt = read_json(receipt_path(self.control, "session-a", "partial-turn"))
+        self.assertEqual(receipt["proposal_ids"], [proposal_ids[0], proposal_ids[2]])
+
+        transcript = self.write_turn_transcript(prompt, "session-a", "partial-turn")
+        direct = (
+            f"{sys.executable} {SCRIPTS / 'apply_proposals.py'} "
+            f"--control-root {self.control} --session-id session-a --turn-id partial-turn"
+        )
+        authorized = self.run_script(
+            "hook_dispatch.py",
+            "pre-tool",
+            "--control-root",
+            str(self.control),
+            input_value={
+                "session_id": "session-a",
+                "turn_id": "partial-turn",
+                "transcript_path": str(transcript),
+                "tool_name": "Bash",
+                "tool_input": {"command": direct},
+            },
+        )
+        self.assertEqual(authorized.stdout, "")
+        applied = self.run_script(
+            "apply_proposals.py",
+            "--control-root",
+            str(self.control),
+            "--session-id",
+            "session-a",
+            "--turn-id",
+            "partial-turn",
+        )
+        statuses = [result["status"] for result in json.loads(applied.stdout)["results"]]
+        self.assertEqual(statuses, ["applied", "applied"])
+        self.assertEqual(
+            [target.read_text(encoding="utf-8") for target in targets],
+            ["after\n", "before\n", "after\n"],
+        )
+        rejected_manifest = read_json(
+            runtime_dir(self.control) / "proposals" / proposal_ids[1] / "manifest.json"
+        )
+        self.assertEqual(rejected_manifest["status"], "rejected")
 
     def test_task_bound_question_rejects_on_natural_no(self) -> None:
         target = self.project / "rejected.md"

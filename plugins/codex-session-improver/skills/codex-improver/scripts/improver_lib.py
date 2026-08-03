@@ -289,6 +289,35 @@ def parse_approval_decision(prompt: str) -> bool | None:
     return None
 
 
+def parse_approval_decisions(prompt: str, expected_count: int) -> list[bool] | None:
+    if not 1 <= expected_count <= 3:
+        return None
+    if expected_count == 1:
+        decision = parse_approval_decision(prompt)
+        return [decision] if decision is not None else None
+
+    parts = [part.strip() for part in re.split(r"[,;\n]+", prompt) if part.strip()]
+    if len(parts) != expected_count:
+        return None
+
+    indexes: list[int | None] = []
+    decisions: list[bool] = []
+    for part in parts:
+        numbered = re.fullmatch(r"(\d+)(?:\s*[.)\]:=-]\s*|\s*[–—]\s*|\s+)(.+)", part)
+        index = int(numbered.group(1)) if numbered else None
+        answer = numbered.group(2) if numbered else part
+        decision = parse_approval_decision(answer)
+        if decision is None:
+            return None
+        indexes.append(index)
+        decisions.append(decision)
+
+    if any(index is not None for index in indexes):
+        if indexes != list(range(1, expected_count + 1)):
+            return None
+    return decisions
+
+
 def question_path(control_root: Path, session_id: str) -> Path:
     key = sha256_bytes(session_id.encode())[:32]
     return runtime_dir(control_root) / "questions" / f"{key}.json"
