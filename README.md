@@ -65,7 +65,7 @@ python3 ~/projects/codex-improver/libexec/session_batch.py start \
   --reprocess-days 1
 ```
 
-This bypasses the processed-session cursor only for settled session files modified during the last 24 hours. It still honors `max_sessions_per_run` (8 by default), includes configured remote hosts, and does not change the default scheduled review. Complete any pending batch before starting a different reprocessing window.
+This bypasses the normal processed-session cursor only for settled session files modified during the last 24 hours. The window is fixed when the replay starts and is drained across batches of at most `max_sessions_per_run` sessions (8 by default), so repeating sessions are avoided without placing the entire history in one model call. The skill continues until every matching local and remote candidate has been considered. It does not change the default scheduled review. Finish an active replay before starting a different reprocessing window.
 
 ## What a proposal looks like
 

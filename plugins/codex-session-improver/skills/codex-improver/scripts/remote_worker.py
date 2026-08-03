@@ -210,6 +210,8 @@ def discover(request: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     bootstrap = int(request.get("bootstrap_days", 7))
     reprocess_since_raw = request.get("reprocess_since")
     reprocess_since = float(reprocess_since_raw) if reprocess_since_raw is not None else None
+    reprocess_until_raw = request.get("reprocess_until")
+    reprocess_until = float(reprocess_until_raw) if reprocess_until_raw is not None else None
     limit = min(max(int(request.get("limit", 8)), 1), 100)
     cutoff = now().timestamp() - bootstrap * 86400
     candidates: list[tuple[float, Path, dict[str, int]]] = []
@@ -226,11 +228,18 @@ def discover(request: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
                 continue
             if not processed and stat.st_mtime < cutoff:
                 continue
-        elif stat.st_mtime < reprocess_since:
-            continue
+        else:
+            if processed.get(str(path)) == value:
+                continue
+            if stat.st_mtime < reprocess_since or (reprocess_until is not None and stat.st_mtime > reprocess_until):
+                continue
         candidates.append((stat.st_mtime, path, value))
     candidates.sort(key=lambda item: (item[0], str(item[1])))
-    return {"status": "ok", "items": [{"path": str(p), "fingerprint": f, "mtime": m} for m, p, f in candidates[:limit]]}
+    return {
+        "status": "ok",
+        "items": [{"path": str(p), "fingerprint": f, "mtime": m} for m, p, f in candidates[:limit]],
+        "has_more": len(candidates) > limit,
+    }
 
 
 def extract(request: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:

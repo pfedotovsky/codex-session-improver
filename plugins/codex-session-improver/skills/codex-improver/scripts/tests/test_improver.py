@@ -317,6 +317,53 @@ class ImproverTest(unittest.TestCase):
         stored = read_json(Path(completed["findings"]))
         self.assertEqual(stored["selection"]["mode"], "reprocess")
 
+    def test_reprocessing_drains_the_entire_window_across_bounded_batches(self) -> None:
+        self.config["max_sessions_per_run"] = 3
+        (self.control / "config.json").write_text(json.dumps(self.config), encoding="utf-8")
+        for index in range(7):
+            self.write_session(f"session-{index}.jsonl")
+
+        seen_paths: set[str] = set()
+        batch_sizes: list[int] = []
+        replay_id: str | None = None
+        while True:
+            payload = json.loads(self.run_script(
+                "session_batch.py",
+                "start",
+                "--control-root",
+                str(self.control),
+                "--reprocess-days",
+                "1",
+            ).stdout)
+            batch_path = next((runtime_dir(self.control) / "batches").glob("*.json"))
+            batch = read_json(batch_path)
+            paths = {item["path"] for item in batch["items"]}
+            self.assertTrue(seen_paths.isdisjoint(paths))
+            seen_paths.update(paths)
+            batch_sizes.append(len(paths))
+            replay_id = replay_id or payload["selection"]["replay_id"]
+            self.assertEqual(payload["selection"]["replay_id"], replay_id)
+
+            findings = self.control / "runtime" / "drafts" / "findings.json"
+            findings.parent.mkdir(parents=True, exist_ok=True)
+            findings.write_text(json.dumps({"clusters": [], "created_proposals": []}), encoding="utf-8")
+            completed = json.loads(self.run_script(
+                "session_batch.py",
+                "complete",
+                "--control-root",
+                str(self.control),
+                "--batch-id",
+                payload["batch_id"],
+                "--findings",
+                str(findings),
+            ).stdout)
+            if not completed["selection"]["has_more"]:
+                break
+
+        self.assertEqual(batch_sizes, [3, 3, 1])
+        self.assertEqual(len(seen_paths), 7)
+        self.assertFalse((runtime_dir(self.control) / "replay.json").exists())
+
     def test_reprocessing_window_excludes_older_sessions(self) -> None:
         path = self.write_session()
         old = time.time() - 2 * 86400
@@ -463,9 +510,10 @@ class ImproverTest(unittest.TestCase):
         with mock.patch("session_batch.discover_local", return_value=local_items), mock.patch(
             "session_batch.call_remote", return_value={"items": remote_items}
         ):
-            selected, errors = discover_all(self.config, {"schema_version": 2, "hosts": {}})
+            selected, errors, has_more = discover_all(self.config, {"schema_version": 2, "hosts": {}})
         self.assertEqual([item["host"] for item in selected], ["local", "dev-1", "local", "dev-1"])
         self.assertEqual(errors, [])
+        self.assertTrue(has_more)
 
     def test_remote_worker_redacts_before_returning_session(self) -> None:
         remote_home = self.root / "remote-home"
@@ -498,7 +546,7 @@ class ImproverTest(unittest.TestCase):
             "processed": processed, "settle_seconds": 0, "bootstrap_days": 7, "limit": 8,
         }).stdout)
         replay = json.loads(self.remote_worker("discover", {
-            "processed": processed,
+            "processed": {},
             "settle_seconds": 0,
             "bootstrap_days": 7,
             "limit": 8,
@@ -506,6 +554,29 @@ class ImproverTest(unittest.TestCase):
         }).stdout)
         self.assertEqual(incremental["items"], [])
         self.assertEqual(len(replay["items"]), 1)
+
+    def test_remote_worker_reports_more_replay_candidates(self) -> None:
+        remote_home = self.root / "remote-home"
+        sessions = remote_home / ".codex" / "sessions"
+        sessions.mkdir(parents=True, exist_ok=True)
+        for index in range(2):
+            (sessions / f"rollout-{index}.jsonl").write_text(
+                json.dumps({
+                    "type": "session_meta",
+                    "payload": {"session_id": f"remote-{index}", "cwd": str(remote_home / "projects")},
+                }) + "\n",
+                encoding="utf-8",
+            )
+        replay = json.loads(self.remote_worker("discover", {
+            "processed": {},
+            "settle_seconds": 0,
+            "bootstrap_days": 7,
+            "limit": 1,
+            "reprocess_since": time.time() - 86400,
+            "reprocess_until": time.time() + 1,
+        }).stdout)
+        self.assertEqual(len(replay["items"]), 1)
+        self.assertTrue(replay["has_more"])
 
     def test_remote_worker_hash_bound_apply_and_stale_detection(self) -> None:
         target = self.root / "remote-home" / "projects" / "AGENTS.md"

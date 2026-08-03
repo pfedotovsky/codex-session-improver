@@ -1,5 +1,9 @@
 # Proposal interfaces
 
+## Active replay state
+
+Historical reprocessing stores one resumable controller-owned state file at `runtime/replay.json`. It fixes the requested `since` and `until` timestamps, records a replay ID and per-host path fingerprints already considered, and is removed after the final bounded batch completes. It contains no transcript content. A different replay window cannot replace an active one.
+
 ## Draft input
 
 Write UTF-8 JSON with this shape:

@@ -20,6 +20,7 @@ from improver_lib import (
     load_config,
     now,
     parse_session,
+    parse_iso,
     path_fingerprint,
     print_json,
     prune_runtime,
@@ -54,6 +55,36 @@ def pending_batch(control_root: Path) -> tuple[Path, dict[str, Any]] | None:
     return None
 
 
+def replay_path(control_root: Path) -> Path:
+    return runtime_dir(control_root) / "replay.json"
+
+
+def active_replay(control_root: Path, days: int) -> dict[str, Any]:
+    path = replay_path(control_root)
+    replay = read_json(path)
+    if replay is not None:
+        if not isinstance(replay, dict) or replay.get("status") != "active":
+            raise RuntimeError("Invalid active reprocessing state")
+        if replay.get("days") != days:
+            raise RuntimeError(
+                f"A {replay.get('days')}-day reprocessing window is still active; finish it before starting a {days}-day window"
+            )
+        return replay
+    until = now()
+    since = until - dt.timedelta(days=days)
+    replay = {
+        "schema_version": 1,
+        "replay_id": f"R-{until.strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}",
+        "status": "active",
+        "days": days,
+        "since": iso(since),
+        "until": iso(until),
+        "hosts": {},
+    }
+    atomic_json(path, replay)
+    return replay
+
+
 def processed_for(cursor: dict[str, Any], host_id: str) -> dict[str, Any]:
     if host_id == "local" and isinstance(cursor.get("processed"), dict):
         legacy = cursor.pop("processed")
@@ -67,6 +98,7 @@ def discover_local(
     config: dict[str, Any],
     processed: dict[str, Any],
     reprocess_since: float | None = None,
+    reprocess_until: float | None = None,
 ) -> list[dict[str, Any]]:
     sessions_root = Path(config["sessions_root"]).expanduser()
     settle_seconds = int(config.get("settle_seconds", 300))
@@ -85,8 +117,14 @@ def discover_local(
                 continue
             if not processed and stat.st_mtime < cutoff:
                 continue
-        elif stat.st_mtime < reprocess_since:
-            continue
+        else:
+            if processed.get(str(path)) == fingerprint:
+                continue
+            outside_window = stat.st_mtime < reprocess_since or (
+                reprocess_until is not None and stat.st_mtime > reprocess_until
+            )
+            if outside_window:
+                continue
         candidates.append((stat.st_mtime, path, fingerprint))
     return [{"host": "local", "path": str(path), "fingerprint": fp, "mtime": mtime} for mtime, path, fp in candidates]
 
@@ -95,11 +133,13 @@ def discover_all(
     config: dict[str, Any],
     cursor: dict[str, Any],
     reprocess_since: float | None = None,
-) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    reprocess_until: float | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]], bool]:
     by_host: dict[str, list[dict[str, Any]]] = {
-        "local": discover_local(config, processed_for(cursor, "local"), reprocess_since)
+        "local": discover_local(config, processed_for(cursor, "local"), reprocess_since, reprocess_until)
     }
     errors: list[dict[str, str]] = []
+    remote_has_more = False
     limit = int(config.get("max_sessions_per_run", 8))
     for host_id in remote_hosts(config):
         try:
@@ -111,6 +151,7 @@ def discover_all(
             }
             if reprocess_since is not None:
                 request["reprocess_since"] = reprocess_since
+                request["reprocess_until"] = reprocess_until
             response = call_remote(
                 config,
                 host_id,
@@ -123,6 +164,7 @@ def discover_all(
                 if isinstance(item, dict):
                     host_candidates.append({"host": host_id, **item})
             by_host[host_id] = host_candidates
+            remote_has_more = remote_has_more or bool(response.get("has_more"))
         except Exception as exc:
             errors.append({"host": host_id, "reason": str(exc)[:500]})
     for candidates in by_host.values():
@@ -137,7 +179,8 @@ def discover_all(
                 made_progress = True
         if not made_progress:
             break
-    return selected, errors
+    has_more = remote_has_more or bool(errors) or any(by_host.values())
+    return selected, errors, has_more
 
 
 def emit_batch(control_root: Path, config: dict[str, Any], batch_path: Path, batch: dict[str, Any]) -> None:
@@ -184,6 +227,8 @@ def emit_batch(control_root: Path, config: dict[str, Any], batch_path: Path, bat
     if deferred:
         deferred_keys = {(item.get("host"), item.get("path")) for item in deferred}
         batch["items"] = [item for item in batch.get("items", []) if (item.get("host", "local"), item.get("path")) not in deferred_keys]
+        if batch.get("selection", {}).get("mode") == "reprocess":
+            batch["selection"]["has_more"] = True
         atomic_json(batch_path, batch)
     print_json(
         {
@@ -223,15 +268,34 @@ def start(args: argparse.Namespace) -> int:
         cursor = {"schema_version": 2, "hosts": {}}
     discovery = sync_discovered_hosts(control_root, config)
     reprocess_since = None
+    reprocess_until = None
+    discovery_cursor = cursor
     selection: dict[str, Any] = {"mode": "incremental"}
     if reprocess_days is not None:
-        since = now() - dt.timedelta(days=reprocess_days)
-        reprocess_since = since.timestamp()
-        selection = {"mode": "reprocess", "days": reprocess_days, "since": iso(since)}
-    items, host_errors = discover_all(config, cursor, reprocess_since)
+        replay = active_replay(control_root, reprocess_days)
+        discovery_cursor = replay
+        reprocess_since = parse_iso(str(replay["since"])).timestamp()
+        reprocess_until = parse_iso(str(replay["until"])).timestamp()
+        selection = {
+            "mode": "reprocess",
+            "replay_id": replay["replay_id"],
+            "days": replay["days"],
+            "since": replay["since"],
+            "until": replay["until"],
+        }
+    items, host_errors, has_more = discover_all(
+        config,
+        discovery_cursor,
+        reprocess_since,
+        reprocess_until,
+    )
+    if reprocess_days is not None:
+        selection["has_more"] = has_more
     for error in discovery.get("errors", []):
         if isinstance(error, dict):
             host_errors.append({"host": f"discovery:{error.get('ssh_target', 'unknown')}", "reason": str(error.get("reason", ""))[:500]})
+    if reprocess_days is not None and host_errors:
+        selection["has_more"] = True
     batch_id = f"B-{now().strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
     batch = {
         "schema_version": 2,
@@ -266,6 +330,15 @@ def complete(args: argparse.Namespace) -> int:
     findings = read_json(findings_path)
     if not isinstance(findings, dict):
         raise RuntimeError("Findings must be a JSON object")
+    selection = batch.get("selection", {"mode": "incremental"})
+    state_path: Path | None = None
+    replay: dict[str, Any] | None = None
+    if selection.get("mode") == "reprocess":
+        state_path = replay_path(control_root)
+        replay_value = read_json(state_path)
+        if not isinstance(replay_value, dict) or replay_value.get("replay_id") != selection.get("replay_id"):
+            raise RuntimeError("Active reprocessing state does not match the pending batch")
+        replay = replay_value
     sanitized = redact_obj(findings, 3000)
     sanitized.update(
         {
@@ -288,6 +361,15 @@ def complete(args: argparse.Namespace) -> int:
     cursor["last_success_at"] = iso()
     cursor["last_batch_id"] = args.batch_id
     atomic_json(cursor_path, cursor)
+    if replay is not None and state_path is not None:
+        for item in batch.get("items", []):
+            processed_for(replay, str(item.get("host", "local")))[item["path"]] = item["fingerprint"]
+        if selection.get("has_more"):
+            replay["last_batch_id"] = args.batch_id
+            replay["updated_at"] = iso()
+            atomic_json(state_path, replay)
+        else:
+            state_path.unlink()
     batch_path.unlink()
     try:
         findings_path.unlink()
