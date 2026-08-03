@@ -208,6 +208,8 @@ def discover(request: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("processed must be an object")
     settle = int(request.get("settle_seconds", 300))
     bootstrap = int(request.get("bootstrap_days", 7))
+    reprocess_since_raw = request.get("reprocess_since")
+    reprocess_since = float(reprocess_since_raw) if reprocess_since_raw is not None else None
     limit = min(max(int(request.get("limit", 8)), 1), 100)
     cutoff = now().timestamp() - bootstrap * 86400
     candidates: list[tuple[float, Path, dict[str, int]]] = []
@@ -219,9 +221,12 @@ def discover(request: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
             value = fingerprint(path)
         except OSError:
             continue
-        if processed.get(str(path)) == value:
-            continue
-        if not processed and stat.st_mtime < cutoff:
+        if reprocess_since is None:
+            if processed.get(str(path)) == value:
+                continue
+            if not processed and stat.st_mtime < cutoff:
+                continue
+        elif stat.st_mtime < reprocess_since:
             continue
         candidates.append((stat.st_mtime, path, value))
     candidates.sort(key=lambda item: (item[0], str(item[1])))

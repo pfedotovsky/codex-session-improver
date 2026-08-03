@@ -274,6 +274,78 @@ class ImproverTest(unittest.TestCase):
         second = self.run_script("session_batch.py", "start", "--control-root", str(self.control))
         self.assertEqual(json.loads(second.stdout)["sessions"], [])
 
+    def test_recent_sessions_can_be_reprocessed_after_completion(self) -> None:
+        self.write_session()
+        first = json.loads(self.run_script("session_batch.py", "start", "--control-root", str(self.control)).stdout)
+        findings = self.control / "runtime" / "drafts" / "findings.json"
+        findings.parent.mkdir(parents=True, exist_ok=True)
+        findings.write_text(json.dumps({"clusters": [], "created_proposals": []}), encoding="utf-8")
+        self.run_script(
+            "session_batch.py",
+            "complete",
+            "--control-root",
+            str(self.control),
+            "--batch-id",
+            first["batch_id"],
+            "--findings",
+            str(findings),
+        )
+
+        replay = self.run_script(
+            "session_batch.py",
+            "start",
+            "--control-root",
+            str(self.control),
+            "--reprocess-days",
+            "1",
+        )
+        payload = json.loads(replay.stdout)
+        self.assertEqual(len(payload["sessions"]), 1)
+        self.assertEqual(payload["selection"]["mode"], "reprocess")
+        self.assertEqual(payload["selection"]["days"], 1)
+        findings.write_text(json.dumps({"clusters": [], "created_proposals": []}), encoding="utf-8")
+        completed = json.loads(self.run_script(
+            "session_batch.py",
+            "complete",
+            "--control-root",
+            str(self.control),
+            "--batch-id",
+            payload["batch_id"],
+            "--findings",
+            str(findings),
+        ).stdout)
+        stored = read_json(Path(completed["findings"]))
+        self.assertEqual(stored["selection"]["mode"], "reprocess")
+
+    def test_reprocessing_window_excludes_older_sessions(self) -> None:
+        path = self.write_session()
+        old = time.time() - 2 * 86400
+        os.utime(path, (old, old))
+        result = self.run_script(
+            "session_batch.py",
+            "start",
+            "--control-root",
+            str(self.control),
+            "--reprocess-days",
+            "1",
+        )
+        self.assertEqual(json.loads(result.stdout)["sessions"], [])
+
+    def test_reprocessing_rejects_a_different_pending_batch(self) -> None:
+        self.write_session()
+        self.run_script("session_batch.py", "start", "--control-root", str(self.control))
+        result = self.run_script(
+            "session_batch.py",
+            "start",
+            "--control-root",
+            str(self.control),
+            "--reprocess-days",
+            "1",
+            check=False,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("different batch is pending", result.stderr)
+
     def test_settling_session_is_deferred(self) -> None:
         self.config["settle_seconds"] = 300
         (self.control / "config.json").write_text(json.dumps(self.config), encoding="utf-8")
@@ -409,6 +481,31 @@ class ImproverTest(unittest.TestCase):
         self.assertNotIn(TEST_SECRET, extracted.stdout)
         self.assertNotIn("me@example.com", extracted.stdout)
         self.assertEqual(json.loads(extracted.stdout)["sessions"][0]["session_id"], "remote-thread")
+
+    def test_remote_worker_can_reprocess_a_processed_recent_session(self) -> None:
+        remote_home = self.root / "remote-home"
+        session = remote_home / ".codex" / "sessions" / "rollout.jsonl"
+        session.parent.mkdir(parents=True, exist_ok=True)
+        session.write_text(
+            json.dumps({"type": "session_meta", "payload": {"session_id": "remote-thread", "cwd": str(remote_home / "projects")}}) + "\n",
+            encoding="utf-8",
+        )
+        first = json.loads(self.remote_worker("discover", {
+            "processed": {}, "settle_seconds": 0, "bootstrap_days": 7, "limit": 8,
+        }).stdout)
+        processed = {first["items"][0]["path"]: first["items"][0]["fingerprint"]}
+        incremental = json.loads(self.remote_worker("discover", {
+            "processed": processed, "settle_seconds": 0, "bootstrap_days": 7, "limit": 8,
+        }).stdout)
+        replay = json.loads(self.remote_worker("discover", {
+            "processed": processed,
+            "settle_seconds": 0,
+            "bootstrap_days": 7,
+            "limit": 8,
+            "reprocess_since": time.time() - 86400,
+        }).stdout)
+        self.assertEqual(incremental["items"], [])
+        self.assertEqual(len(replay["items"]), 1)
 
     def test_remote_worker_hash_bound_apply_and_stale_detection(self) -> None:
         target = self.root / "remote-home" / "projects" / "AGENTS.md"

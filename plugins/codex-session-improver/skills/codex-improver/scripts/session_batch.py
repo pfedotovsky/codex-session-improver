@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
 import sys
 import uuid
@@ -62,7 +63,11 @@ def processed_for(cursor: dict[str, Any], host_id: str) -> dict[str, Any]:
     return host.setdefault("processed", {})
 
 
-def discover_local(config: dict[str, Any], processed: dict[str, Any]) -> list[dict[str, Any]]:
+def discover_local(
+    config: dict[str, Any],
+    processed: dict[str, Any],
+    reprocess_since: float | None = None,
+) -> list[dict[str, Any]]:
     sessions_root = Path(config["sessions_root"]).expanduser()
     settle_seconds = int(config.get("settle_seconds", 300))
     cutoff = now().timestamp() - int(config.get("bootstrap_days", 7)) * 86400
@@ -75,30 +80,42 @@ def discover_local(config: dict[str, Any], processed: dict[str, Any]) -> list[di
             fingerprint = path_fingerprint(path)
         except OSError:
             continue
-        if processed.get(str(path)) == fingerprint:
-            continue
-        if not processed and stat.st_mtime < cutoff:
+        if reprocess_since is None:
+            if processed.get(str(path)) == fingerprint:
+                continue
+            if not processed and stat.st_mtime < cutoff:
+                continue
+        elif stat.st_mtime < reprocess_since:
             continue
         candidates.append((stat.st_mtime, path, fingerprint))
     return [{"host": "local", "path": str(path), "fingerprint": fp, "mtime": mtime} for mtime, path, fp in candidates]
 
 
-def discover_all(config: dict[str, Any], cursor: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    by_host: dict[str, list[dict[str, Any]]] = {"local": discover_local(config, processed_for(cursor, "local"))}
+def discover_all(
+    config: dict[str, Any],
+    cursor: dict[str, Any],
+    reprocess_since: float | None = None,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    by_host: dict[str, list[dict[str, Any]]] = {
+        "local": discover_local(config, processed_for(cursor, "local"), reprocess_since)
+    }
     errors: list[dict[str, str]] = []
     limit = int(config.get("max_sessions_per_run", 8))
     for host_id in remote_hosts(config):
         try:
+            request: dict[str, Any] = {
+                "processed": processed_for(cursor, host_id),
+                "settle_seconds": int(config.get("settle_seconds", 300)),
+                "bootstrap_days": int(config.get("bootstrap_days", 7)),
+                "limit": limit,
+            }
+            if reprocess_since is not None:
+                request["reprocess_since"] = reprocess_since
             response = call_remote(
                 config,
                 host_id,
                 "discover",
-                {
-                    "processed": processed_for(cursor, host_id),
-                    "settle_seconds": int(config.get("settle_seconds", 300)),
-                    "bootstrap_days": int(config.get("bootstrap_days", 7)),
-                    "limit": limit,
-                },
+                request,
                 timeout=45,
             )
             host_candidates: list[dict[str, Any]] = []
@@ -177,6 +194,7 @@ def emit_batch(control_root: Path, config: dict[str, Any], batch_path: Path, bat
             "skipped": skipped,
             "host_errors": batch.get("host_errors", []),
             "host_discovery": batch.get("host_discovery", {}),
+            "selection": batch.get("selection", {"mode": "incremental"}),
             "deferred_sessions": len(deferred),
             "recent_findings": recent_findings(control_root, int(config.get("retention_days", 90))),
         }
@@ -187,16 +205,30 @@ def start(args: argparse.Namespace) -> int:
     control_root = args.control_root.resolve()
     config = load_config(control_root)
     ensure_runtime(control_root)
+    reprocess_days = args.reprocess_days
+    if reprocess_days is not None and reprocess_days <= 0:
+        raise RuntimeError("--reprocess-days must be a positive integer")
     existing = pending_batch(control_root)
     if existing:
         path, batch = existing
+        selection = batch.get("selection", {"mode": "incremental"})
+        if reprocess_days is not None and (
+            selection.get("mode") != "reprocess" or selection.get("days") != reprocess_days
+        ):
+            raise RuntimeError("A different batch is pending; complete it before starting this reprocessing window")
         emit_batch(control_root, config, path, batch)
         return 0
     cursor = read_json(runtime_dir(control_root) / "cursor.json", {"schema_version": 2, "hosts": {}})
     if not isinstance(cursor, dict):
         cursor = {"schema_version": 2, "hosts": {}}
     discovery = sync_discovered_hosts(control_root, config)
-    items, host_errors = discover_all(config, cursor)
+    reprocess_since = None
+    selection: dict[str, Any] = {"mode": "incremental"}
+    if reprocess_days is not None:
+        since = now() - dt.timedelta(days=reprocess_days)
+        reprocess_since = since.timestamp()
+        selection = {"mode": "reprocess", "days": reprocess_days, "since": iso(since)}
+    items, host_errors = discover_all(config, cursor, reprocess_since)
     for error in discovery.get("errors", []):
         if isinstance(error, dict):
             host_errors.append({"host": f"discovery:{error.get('ssh_target', 'unknown')}", "reason": str(error.get("reason", ""))[:500]})
@@ -206,6 +238,7 @@ def start(args: argparse.Namespace) -> int:
         "batch_id": batch_id,
         "status": "pending",
         "created_at": iso(),
+        "selection": selection,
         "items": items,
         "host_errors": host_errors,
         "host_discovery": {
@@ -234,7 +267,14 @@ def complete(args: argparse.Namespace) -> int:
     if not isinstance(findings, dict):
         raise RuntimeError("Findings must be a JSON object")
     sanitized = redact_obj(findings, 3000)
-    sanitized.update({"schema_version": 2, "batch_id": args.batch_id, "completed_at": iso()})
+    sanitized.update(
+        {
+            "schema_version": 2,
+            "batch_id": args.batch_id,
+            "completed_at": iso(),
+            "selection": batch.get("selection", {"mode": "incremental"}),
+        }
+    )
     output_path = runtime_dir(control_root) / "findings" / f"{now().strftime('%Y%m%d')}-{args.batch_id}.json"
     atomic_json(output_path, sanitized)
 
@@ -254,7 +294,15 @@ def complete(args: argparse.Namespace) -> int:
     except FileNotFoundError:
         pass
     removed = prune_runtime(control_root, int(config.get("retention_days", 90)))
-    print_json({"batch_id": args.batch_id, "status": "completed", "findings": str(output_path), "pruned": removed})
+    print_json(
+        {
+            "batch_id": args.batch_id,
+            "status": "completed",
+            "selection": batch.get("selection", {"mode": "incremental"}),
+            "findings": str(output_path),
+            "pruned": removed,
+        }
+    )
     return 0
 
 
@@ -263,6 +311,11 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     start_parser = subparsers.add_parser("start")
     start_parser.add_argument("--control-root", type=Path, required=True)
+    start_parser.add_argument(
+        "--reprocess-days",
+        type=int,
+        help="reanalyze settled sessions modified within the last N days, even if already processed",
+    )
     start_parser.set_defaults(handler=start)
     complete_parser = subparsers.add_parser("complete")
     complete_parser.add_argument("--control-root", type=Path, required=True)

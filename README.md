@@ -22,7 +22,7 @@ flowchart LR
     E -->|"Validation fails"| G["Restore backup"]
 ```
 
-The controller runs incrementally, so each settled session is assessed once. Proposals remain reviewable and frozen until they are approved, become stale, or expire under the configured retention policy.
+The controller runs incrementally by default, so each settled session is normally assessed once. You can explicitly reprocess a recent time window after changing the analysis logic. Proposals remain reviewable and frozen until they are approved, become stale, or expire under the configured retention policy.
 
 ## Quick start
 
@@ -48,6 +48,24 @@ Use $codex-improver to run the next session review now. Analyze only; do not app
 ```
 
 Both entry points call the same skill, so the safety and analysis workflow stays in one place. `scheduled-task.spec.toml` remains a portable, project-owned description rather than Codex's private automation format, and `automation-prompt.md` provides the generated one-line task prompt. The Codex app remains the runtime source of truth; only its supported automation interface edits private task state.
+
+### Reanalyze recent sessions
+
+To apply updated analysis logic to sessions that were already assessed, ask:
+
+```text
+Use $codex-improver to reanalyze settled sessions from the last day. Analyze only; do not apply proposals.
+```
+
+The corresponding deterministic command is:
+
+```bash
+python3 ~/projects/codex-improver/libexec/session_batch.py start \
+  --control-root ~/projects/codex-improver \
+  --reprocess-days 1
+```
+
+This bypasses the processed-session cursor only for settled session files modified during the last 24 hours. It still honors `max_sessions_per_run` (8 by default), includes configured remote hosts, and does not change the default scheduled review. Complete any pending batch before starting a different reprocessing window.
 
 ## What a proposal looks like
 
