@@ -2,7 +2,7 @@
 
 ## Reporting a vulnerability
 
-Do not include real transcripts, credentials, hostnames, private paths, or approval receipts in a public issue. Use GitHub's private vulnerability reporting for this repository. If that is unavailable, open a minimal public issue asking the maintainer to enable a private reporting channel.
+Do not include real transcripts, credentials, hostnames, private paths, or runtime approval/application artifacts in a public issue. Use GitHub's private vulnerability reporting for this repository. If that is unavailable, open a minimal public issue asking the maintainer to enable a private reporting channel.
 
 ## Security-sensitive boundaries
 

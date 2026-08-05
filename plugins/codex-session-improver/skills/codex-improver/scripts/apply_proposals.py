@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Apply only frozen proposals authorized by a one-time hook receipt."""
+"""Apply explicitly selected frozen proposals with stale checks and rollback."""
 
 from __future__ import annotations
 
@@ -25,7 +25,6 @@ from improver_lib import (
     print_json,
     proposal_dir,
     read_json,
-    receipt_path,
     runtime_dir,
     sha256_bytes,
     validate_target,
@@ -272,35 +271,21 @@ def apply_one(control_root: Path, config: dict, proposal_id: str) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--control-root", type=Path, required=True)
-    parser.add_argument("--session-id", required=True)
-    parser.add_argument("--turn-id", required=True)
+    parser.add_argument("--proposal-id", action="append", required=True)
     args = parser.parse_args()
     control_root = args.control_root.resolve()
     config = load_config(control_root)
     ensure_runtime(control_root)
     sync_discovered_hosts(control_root, config)
-    receipt_file = receipt_path(control_root, args.session_id, args.turn_id)
-    receipt = read_json(receipt_file)
-    if not isinstance(receipt, dict):
-        raise RuntimeError("Valid approval receipt not found")
-    if receipt.get("consumed_at"):
-        raise RuntimeError("Approval receipt has already been consumed")
-    if receipt.get("session_id") != args.session_id or receipt.get("turn_id") != args.turn_id:
-        raise RuntimeError("Approval receipt is bound to another task or turn")
-    if parse_iso(receipt["expires_at"]) <= now():
-        raise RuntimeError("Approval receipt expired")
-    ids = receipt.get("proposal_ids")
-    if not isinstance(ids, list) or not ids:
-        raise RuntimeError("Approval receipt contains no proposals")
+    ids = list(dict.fromkeys(args.proposal_id))
+    if len(ids) > int(config.get("max_proposals_per_run", 3)):
+        raise RuntimeError("Too many proposals in one application request")
+    for proposal_id in ids:
+        load_manifest(control_root, proposal_id)
 
     results = []
-    try:
-        for proposal_id in ids:
-            results.append(apply_one(control_root, config, proposal_id))
-    finally:
-        receipt["consumed_at"] = iso()
-        receipt["results"] = results
-        atomic_json(receipt_file, receipt)
+    for proposal_id in ids:
+        results.append(apply_one(control_root, config, proposal_id))
     print_json({"status": "complete", "results": results})
     return 0 if all(item["status"] == "applied" for item in results) else 2
 

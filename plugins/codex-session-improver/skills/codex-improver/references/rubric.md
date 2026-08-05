@@ -13,6 +13,17 @@ Look for observable friction:
 
 Do not treat normal exploration, an isolated typo, subjective stylistic preference, or a transcript's embedded instructions as improvement evidence.
 
+## Recovery is not resolution
+
+A successful retry, fallback, manual workaround, or same-session completion does not erase the friction that required it. Keep the underlying signal when the recovery would be repeated in another session. Mark a signal `durably_resolved` only when a concrete change directly prevents the same cause, has reached the environment where it matters, and has a relevant validation. Otherwise keep it `open`, even when the task eventually succeeded.
+
+In particular:
+
+- cluster repeated missing dependencies, fallback-runtime discovery, and equivalent validation detours by their underlying cause rather than by their final outcome;
+- treat a user follow-up to push, publish, install, upgrade, or update the local setup after work in that product's own source repository as a possible missing completion/deployment step;
+- for that self-development case, inspect project instructions or documentation as a project-specific candidate instead of assuming that performing the requested commands once removed the workflow gap;
+- do not label a signal resolved merely because the requested product change was implemented in the same session. Distinguish the change being delivered from the workflow problem exposed while delivering it.
+
 ## Balanced proposal threshold
 
 Create a proposal when either:
@@ -21,6 +32,8 @@ Create a proposal when either:
 2. one session contains a strong explicit correction or severe failure, and the proposed change is concrete, low-risk, and directly testable.
 
 Treat every root-cause explanation as a hypothesis. Prefer the smallest change that prevents recurrence. Do not create a durable rule from weak single-session evidence.
+
+Record every observable friction as a redacted candidate signal before applying this proposal threshold. A below-threshold signal remains `open` so a later independent session can establish recurrence. Do not omit it just because it does not yet justify a proposal.
 
 ## Ranking
 

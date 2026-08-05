@@ -53,10 +53,12 @@ class InstallerTest(unittest.TestCase):
         result = self.run_installer()
         payload = json.loads(result.stdout)
         self.assertEqual(payload["status"], "installed")
-        self.assertTrue(payload["hook_trust_required"])
-        self.assertTrue((self.control / "libexec" / "approval_prompt.py").is_file())
+        self.assertFalse(payload["hook_trust_required"])
+        self.assertFalse(payload["hooks_installed"])
+        self.assertFalse((self.control / "libexec" / "approval_prompt.py").exists())
+        self.assertFalse((self.control / "libexec" / "hook_dispatch.py").exists())
         self.assertTrue((self.control / "libexec" / "apply_proposals.py").is_file())
-        self.assertTrue((self.control / ".codex" / "hooks.json").is_file())
+        self.assertFalse((self.control / ".codex" / "hooks.json").exists())
         self.assertTrue((self.control / "automation-prompt.md").is_file())
         self.assertTrue((self.control / "scheduled-task.spec.toml").is_file())
         automation_prompt = (self.control / "automation-prompt.md").read_text(encoding="utf-8")
@@ -71,12 +73,6 @@ class InstallerTest(unittest.TestCase):
         config = json.loads((self.control / "config.json").read_text(encoding="utf-8"))
         self.assertEqual(config["remote_hosts"], [])
         self.assertEqual(config["control_root"], str(self.control.resolve()))
-        hook = json.loads((self.control / ".codex" / "hooks.json").read_text(encoding="utf-8"))
-        command = hook["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
-        self.assertIn(str(self.control / "libexec" / "hook_dispatch.py"), command)
-        prompt_command = hook["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
-        self.assertIn("user-prompt", prompt_command)
-        self.assertIn(str(self.control / "libexec" / "hook_dispatch.py"), prompt_command)
         skill = self.home / ".agents" / "skills" / "codex-improver"
         self.assertTrue((skill / "SKILL.md").is_file())
         self.assertFalse((skill / "scripts" / "tests").exists())
@@ -92,6 +88,10 @@ class InstallerTest(unittest.TestCase):
         marker.write_text("{}", encoding="utf-8")
         previous_spec = self.control / "scheduled-task.spec.toml"
         previous_spec.write_text("old task spec\n", encoding="utf-8")
+        legacy_hooks = self.control / ".codex" / "hooks.json"
+        legacy_hooks.write_text('{"hooks": {}}\n', encoding="utf-8")
+        for name in ("approval_prompt.py", "hook_dispatch.py"):
+            (self.control / "libexec" / name).write_text("legacy\n", encoding="utf-8")
         result = self.run_installer("--upgrade")
         payload = json.loads(result.stdout)
         self.assertEqual(payload["status"], "upgraded")
@@ -102,6 +102,12 @@ class InstallerTest(unittest.TestCase):
         self.assertNotEqual(previous_spec.read_text(encoding="utf-8"), "old task spec\n")
         self.assertIsNotNone(payload["managed_backup"])
         self.assertIsNotNone(payload["standalone_skill_backup"])
+        self.assertFalse(legacy_hooks.exists())
+        self.assertFalse((self.control / "libexec" / "approval_prompt.py").exists())
+        self.assertFalse((self.control / "libexec" / "hook_dispatch.py").exists())
+        backup = Path(payload["managed_backup"])
+        self.assertTrue((backup / ".codex" / "hooks.json").is_file())
+        self.assertTrue((backup / "libexec" / "hook_dispatch.py").is_file())
 
     def test_rejects_home_as_project_root(self) -> None:
         result = subprocess.run(

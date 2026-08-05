@@ -10,7 +10,7 @@
    python3 <skill-root>/scripts/install.py --control-root <control-root> --project-root <projects-root>
    ```
 
-4. Report the generated files and ask the user to trust hooks for the new control project when Codex first opens it.
+4. Report the generated files. The improver installs no hooks and requires no hook-trust onboarding.
 5. Create a standalone local scheduled task through the Codex app automation capability. Use the generated one-line prompt at `<control-root>/automation-prompt.md` and the portable source specification at `<control-root>/scheduled-task.spec.toml`, select the control project, and use the user's requested cadence. If none is supplied, recommend daily at 12:45 in the user's local timezone with a high-reasoning model. Keep the workflow in this skill rather than expanding it into the task prompt. Treat the Codex app as the runtime source of truth; do not copy the portable specification into Codex's private automation state.
 6. Run diagnostics from `<control-root>/libexec/diagnose.py` before declaring setup complete.
 
@@ -18,7 +18,7 @@ The installer does not write Codex's private automation state directly. It gener
 
 ## Upgrade
 
-Run the same installer with `--upgrade`. Preserve `config.json`, `runtime/`, proposals, receipts, findings, and backups. Refresh only managed scripts and control-project policy files. Review any reported configuration migration before enabling new roots or host capabilities.
+Run the same installer with `--upgrade`. Preserve `config.json`, `runtime/`, proposals, findings, and backups. Refresh only managed scripts and control-project policy files. The upgrade backs up and removes obsolete hook files from earlier versions. Review any reported configuration migration before enabling new roots or host capabilities.
 
 ## Standalone installation from a clone
 

@@ -7,7 +7,6 @@ import argparse
 import datetime as dt
 import json
 import os
-import shlex
 import shutil
 import sys
 from pathlib import Path
@@ -15,10 +14,8 @@ from typing import Any
 
 
 ENGINE_FILES = (
-    "approval_prompt.py",
     "apply_proposals.py",
     "diagnose.py",
-    "hook_dispatch.py",
     "host_discovery.py",
     "improver_lib.py",
     "proposal_tool.py",
@@ -27,7 +24,8 @@ ENGINE_FILES = (
     "session_batch.py",
     "validate_skill.py",
 )
-RUNTIME_DIRS = ("batches", "findings", "proposals", "questions", "approvals", "backups", "runs", "drafts")
+OBSOLETE_ENGINE_FILES = ("approval_prompt.py", "hook_dispatch.py")
+RUNTIME_DIRS = ("batches", "findings", "proposals", "backups", "runs", "drafts")
 
 
 def atomic_text(path: Path, text: str, mode: int = 0o644) -> None:
@@ -77,58 +75,6 @@ def render_config_toml(writable_roots: list[Path], network_access: bool) -> str:
     )
 
 
-def render_hooks(python: Path, control_root: Path) -> str:
-    pre_tool_command = " ".join(
-        shlex.quote(value)
-        for value in (
-            str(python),
-            str(control_root / "libexec" / "hook_dispatch.py"),
-            "pre-tool",
-            "--control-root",
-            str(control_root),
-        )
-    )
-    user_prompt_command = " ".join(
-        shlex.quote(value)
-        for value in (
-            str(python),
-            str(control_root / "libexec" / "hook_dispatch.py"),
-            "user-prompt",
-            "--control-root",
-            str(control_root),
-        )
-    )
-    return json_text(
-        {
-            "description": "Bind Codex improver approval questions to exact proposals and block unapproved external writes.",
-            "hooks": {
-                "PreToolUse": [
-                    {
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": pre_tool_command,
-                                "timeout": 5,
-                            }
-                        ]
-                    }
-                ],
-                "UserPromptSubmit": [
-                    {
-                        "hooks": [
-                            {
-                                "type": "command",
-                                "command": user_prompt_command,
-                                "timeout": 5,
-                            }
-                        ]
-                    }
-                ],
-            },
-        }
-    )
-
-
 def backup_managed_files(control_root: Path) -> Path | None:
     candidates = (
         control_root / "AGENTS.md",
@@ -137,6 +83,7 @@ def backup_managed_files(control_root: Path) -> Path | None:
         control_root / "scheduled-task.spec.toml",
         control_root / ".codex" / "hooks.json",
         control_root / ".codex" / "config.toml",
+        *(control_root / "libexec" / name for name in OBSOLETE_ENGINE_FILES),
     )
     existing = [path for path in candidates if path.is_file()]
     if not existing:
@@ -263,6 +210,11 @@ def main() -> int:
     for name in RUNTIME_DIRS:
         (control_root / "runtime" / name).mkdir(parents=True, exist_ok=True)
     install_engine(skill_root / "scripts", control_root / "libexec")
+    for name in OBSOLETE_ENGINE_FILES:
+        try:
+            (control_root / "libexec" / name).unlink()
+        except FileNotFoundError:
+            pass
 
     if existing_config is None:
         config = {
@@ -273,7 +225,6 @@ def main() -> int:
             "settle_seconds": 300,
             "retention_days": 90,
             "proposal_expiry_days": 14,
-            "approval_expiry_minutes": 10,
             "max_sessions_per_run": 8,
             "max_proposals_per_run": 3,
             "writable_roots": [str(path) for path in writable_roots],
@@ -306,7 +257,10 @@ def main() -> int:
         .read_text(encoding="utf-8")
         .replace("<control-root>", str(control_root)),
     )
-    atomic_text(control_root / ".codex" / "hooks.json", render_hooks(Path(sys.executable).resolve(), control_root))
+    try:
+        (control_root / ".codex" / "hooks.json").unlink()
+    except FileNotFoundError:
+        pass
     atomic_text(
         control_root / ".codex" / "config.toml",
         render_config_toml(managed_writable_roots, network_access=managed_network_access),
@@ -322,7 +276,8 @@ def main() -> int:
     result = {
         "status": "installed" if existing_config is None else "upgraded",
         **plan,
-        "hook_trust_required": True,
+        "hook_trust_required": False,
+        "hooks_installed": False,
         "automation_prompt": str(control_root / "automation-prompt.md"),
         "automation_spec": str(control_root / "scheduled-task.spec.toml"),
         "managed_backup": str(backup) if backup else None,

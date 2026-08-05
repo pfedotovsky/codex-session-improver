@@ -15,40 +15,6 @@ from typing import Any, Iterable
 
 UTC = dt.timezone.utc
 PROPOSAL_ID_RE = re.compile(r"P-\d{8}-\d{2}")
-YES_RESPONSES = {
-    "yes",
-    "y",
-    "i approve",
-    "approve",
-    "approve it",
-    "approved",
-    "apply",
-    "apply it",
-    "ok",
-    "okay",
-    "да",
-    "ага",
-    "одобряю",
-    "одобряю эту правку",
-    "аппрувлю",
-    "аппрувлю эту правку",
-    "подтверждаю",
-    "применить",
-    "применяй",
-}
-NO_RESPONSES = {
-    "no",
-    "n",
-    "decline",
-    "decline it",
-    "reject",
-    "reject it",
-    "нет",
-    "не применять",
-    "не применяй",
-    "отклонить",
-    "отклоняю",
-}
 SECRET_PATTERNS = [
     re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"),
     re.compile(r"\b(?:gh[opusr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b"),
@@ -154,7 +120,7 @@ def runtime_dir(control_root: Path) -> Path:
 
 
 def ensure_runtime(control_root: Path) -> None:
-    for name in ("batches", "findings", "proposals", "questions", "approvals", "backups", "runs", "drafts"):
+    for name in ("batches", "findings", "proposals", "backups", "runs", "drafts"):
         (runtime_dir(control_root) / name).mkdir(parents=True, exist_ok=True)
 
 
@@ -280,52 +246,45 @@ def load_manifest(control_root: Path, proposal_id: str) -> tuple[Path, dict[str,
     return path, manifest
 
 
-def parse_approval_decision(prompt: str) -> bool | None:
-    normalized = re.sub(r"\s+", " ", prompt.strip().casefold()).strip(" .,!?")
-    if normalized in YES_RESPONSES:
-        return True
-    if normalized in NO_RESPONSES:
-        return False
-    return None
+def proposal_target(manifest: dict[str, Any]) -> str:
+    host = str(manifest.get("target_host", "local"))
+    paths = []
+    for change in manifest.get("changes", []):
+        if isinstance(change, dict) and isinstance(change.get("path"), str):
+            paths.append(change["path"])
+    target = ", ".join(paths) if paths else "target recorded in the frozen manifest"
+    return f"{host} — {target}"
 
 
-def parse_approval_decisions(prompt: str, expected_count: int) -> list[bool] | None:
-    if not 1 <= expected_count <= 3:
-        return None
-    if expected_count == 1:
-        decision = parse_approval_decision(prompt)
-        return [decision] if decision is not None else None
-
-    parts = [part.strip() for part in re.split(r"[,;\n]+", prompt) if part.strip()]
-    if len(parts) != expected_count:
-        return None
-
-    indexes: list[int | None] = []
-    decisions: list[bool] = []
-    for part in parts:
-        numbered = re.fullmatch(r"(\d+)(?:\s*[.)\]:=-]\s*|\s*[–—]\s*|\s+)(.+)", part)
-        index = int(numbered.group(1)) if numbered else None
-        answer = numbered.group(2) if numbered else part
-        decision = parse_approval_decision(answer)
-        if decision is None:
-            return None
-        indexes.append(index)
-        decisions.append(decision)
-
-    if any(index is not None for index in indexes):
-        if indexes != list(range(1, expected_count + 1)):
-            return None
-    return decisions
-
-
-def question_path(control_root: Path, session_id: str) -> Path:
-    key = sha256_bytes(session_id.encode())[:32]
-    return runtime_dir(control_root) / "questions" / f"{key}.json"
-
-
-def receipt_path(control_root: Path, session_id: str, turn_id: str) -> Path:
-    key = sha256_bytes(f"{session_id}\0{turn_id}".encode())[:32]
-    return runtime_dir(control_root) / "approvals" / f"{key}.json"
+def proposal_list_data(
+    control_root: Path,
+    proposal_ids: list[str],
+    created_proposal_ids: Iterable[str] = (),
+) -> list[dict[str, Any]]:
+    proposal_ids = list(dict.fromkeys(proposal_ids))
+    if not 1 <= len(proposal_ids) <= 3:
+        raise RuntimeError("A review result requires one to three proposals")
+    created = set(created_proposal_ids)
+    items = []
+    for proposal_id in proposal_ids:
+        _, manifest = load_manifest(control_root, proposal_id)
+        if manifest.get("status") != "pending" or parse_iso(manifest["expiry_at"]) <= now():
+            raise RuntimeError(f"Proposal is not pending and unexpired: {proposal_id}")
+        items.append(
+            {
+                "id": proposal_id,
+                "origin": "new" if proposal_id in created else "already-pending",
+                "summary": str(manifest.get("summary", ""))[:500],
+                "target": proposal_target(manifest),
+                "evidence": redact_obj(manifest.get("evidence", []), 1500),
+                "risk": str(manifest.get("risk", ""))[:1500],
+                "rollback": str(manifest.get("rollback", ""))[:1500],
+                "validation": redact_obj(manifest.get("validation_commands", []), 1500),
+                "expires_at": str(manifest.get("expiry_at", "")),
+                "patch": str(proposal_dir(control_root, proposal_id) / str(manifest.get("patch_file", "change.patch"))),
+            }
+        )
+    return items
 
 
 def is_relative_to(path: Path, root: Path) -> bool:

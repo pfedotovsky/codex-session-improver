@@ -19,13 +19,9 @@ sys.path.insert(0, str(SCRIPTS))
 TEST_SECRET = "sk-" + "abcdefghijklmnopqrstuvwxyz"
 
 from improver_lib import (
-    parse_approval_decision,
-    parse_approval_decisions,
     parse_session,
-    question_path,
     read_json,
     redact_text,
-    receipt_path,
     runtime_dir,
     validate_target,
 )
@@ -101,13 +97,18 @@ class ImproverTest(unittest.TestCase):
             check=check,
         )
 
-    def write_session(self, name: str = "session.jsonl", cwd: Path | None = None) -> Path:
+    def write_session(
+        self,
+        name: str = "session.jsonl",
+        cwd: Path | None = None,
+        session_id: str = "thr-test",
+    ) -> Path:
         path = self.sessions / name
         records = [
             {
                 "timestamp": "2026-08-01T10:00:00Z",
                 "type": "session_meta",
-                "payload": {"session_id": "thr-test", "cwd": str(cwd or self.project), "source": "cli"},
+                "payload": {"session_id": session_id, "cwd": str(cwd or self.project), "source": "cli"},
             },
             {
                 "timestamp": "2026-08-01T10:00:01Z",
@@ -147,106 +148,11 @@ class ImproverTest(unittest.TestCase):
     def proposal_id(self, output: str) -> str:
         return json.loads(output)["id"]
 
-    def write_turn_transcript(
-        self,
-        prompt: str,
-        session_id: str = "session-a",
-        turn_id: str = "turn-a",
-        assistant_text: str | None = None,
-    ) -> Path:
-        path = self.sessions / f"rollout-{session_id}.jsonl"
-        records = [
-            {"type": "session_meta", "payload": {"session_id": session_id, "cwd": str(self.control)}},
-            {"type": "event_msg", "payload": {"type": "task_started", "turn_id": turn_id}},
-            {
-                "type": "response_item",
-                "payload": {
-                    "type": "message",
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": prompt}],
-                    "internal_chat_message_metadata_passthrough": {"turn_id": turn_id},
-                },
-            },
-            {"type": "event_msg", "payload": {"type": "user_message", "message": prompt}},
-        ]
-        if assistant_text is not None:
-            records.append(
-                {
-                    "type": "response_item",
-                    "payload": {
-                        "type": "message",
-                        "role": "assistant",
-                        "content": [{"type": "output_text", "text": assistant_text}],
-                    },
-                }
-            )
-        path.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
-        return path
-
-    def approval_question_command(self, *proposal_ids: str) -> str:
-        suffix = " ".join(f"--proposal-id {proposal_id}" for proposal_id in proposal_ids)
-        return (
-            f"{sys.executable} {SCRIPTS / 'approval_prompt.py'} "
-            f"--control-root {self.control} {suffix}"
-        )
-
-    def ask_approval(
-        self,
-        *proposal_ids: str,
-        session_id: str = "session-a",
-        turn_id: str = "question-turn",
-    ) -> None:
-        event = {
-            "session_id": session_id,
-            "turn_id": turn_id,
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "tool_input": {"command": self.approval_question_command(*proposal_ids)},
-        }
-        result = self.run_script(
-            "hook_dispatch.py",
-            "pre-tool",
-            "--control-root",
-            str(self.control),
-            input_value=event,
-        )
-        self.assertEqual(result.stdout, "")
-        question = read_json(question_path(self.control, session_id))
-        self.assertEqual(question["proposal_ids"], list(proposal_ids))
-
-    def approve(self, proposal_id: str, session_id: str = "session-a", turn_id: str = "turn-a") -> None:
-        self.ask_approval(proposal_id, session_id=session_id, turn_id=f"{turn_id}-question")
-        result = self.run_script(
-            "hook_dispatch.py",
-            "user-prompt",
-            "--control-root",
-            str(self.control),
-            input_value={"prompt": "yes", "session_id": session_id, "turn_id": turn_id},
-        )
-        payload = json.loads(result.stdout)
-        self.assertIn(f"--session-id {session_id} --turn-id {turn_id}", payload["hookSpecificOutput"]["additionalContext"])
-        receipt = read_json(receipt_path(self.control, session_id, turn_id))
-        self.assertEqual(receipt["proposal_ids"], [proposal_id])
-
     def test_redaction(self) -> None:
         value = redact_text("Bearer abcdefghijklmnopqrstuvwxyz api_key=supersecret me@example.com")
         self.assertNotIn("abcdefghijklmnopqrstuvwxyz", value)
         self.assertNotIn("supersecret", value)
         self.assertNotIn("me@example.com", value)
-
-    def test_natural_approval_decisions_are_bounded(self) -> None:
-        self.assertIs(parse_approval_decision("Аппрувлю эту правку"), True)
-        self.assertIs(parse_approval_decision("yes!"), True)
-        self.assertIs(parse_approval_decision("Нет"), False)
-        self.assertIsNone(parse_approval_decision("yes, but change the target"))
-        self.assertIsNone(parse_approval_decision("APPROVE P-20260802-01"))
-
-    def test_independent_approval_language_is_bounded_and_ordered(self) -> None:
-        self.assertEqual(parse_approval_decisions("1 — да, 2 yes, 3: нет", 3), [True, True, False])
-        self.assertEqual(parse_approval_decisions("yes\nno\nyes", 3), [True, False, True])
-        self.assertIsNone(parse_approval_decisions("1 yes, 3 no, 2 yes", 3))
-        self.assertIsNone(parse_approval_decisions("1 yes, 2 no", 3))
-        self.assertIsNone(parse_approval_decisions("1 yes, 2 no, 3 yes but edit it", 3))
 
     def test_parser_tolerates_unknown_and_truncated_records(self) -> None:
         path = self.write_session()
@@ -268,7 +174,10 @@ class ImproverTest(unittest.TestCase):
         self.assertNotIn("sk-", batch_state)
         findings = self.control / "runtime" / "drafts" / "findings.json"
         findings.parent.mkdir(parents=True, exist_ok=True)
-        findings.write_text(json.dumps({"clusters": [], "created_proposals": []}), encoding="utf-8")
+        findings.write_text(
+            json.dumps({"candidate_signals": [], "clusters": [], "created_proposals": [], "approval_proposal_ids": []}),
+            encoding="utf-8",
+        )
         self.run_script(
             "session_batch.py",
             "complete",
@@ -287,7 +196,10 @@ class ImproverTest(unittest.TestCase):
         first = json.loads(self.run_script("session_batch.py", "start", "--control-root", str(self.control)).stdout)
         findings = self.control / "runtime" / "drafts" / "findings.json"
         findings.parent.mkdir(parents=True, exist_ok=True)
-        findings.write_text(json.dumps({"clusters": [], "created_proposals": []}), encoding="utf-8")
+        findings.write_text(
+            json.dumps({"candidate_signals": [], "clusters": [], "created_proposals": [], "approval_proposal_ids": []}),
+            encoding="utf-8",
+        )
         self.run_script(
             "session_batch.py",
             "complete",
@@ -311,7 +223,10 @@ class ImproverTest(unittest.TestCase):
         self.assertEqual(len(payload["sessions"]), 1)
         self.assertEqual(payload["selection"]["mode"], "reprocess")
         self.assertEqual(payload["selection"]["days"], 1)
-        findings.write_text(json.dumps({"clusters": [], "created_proposals": []}), encoding="utf-8")
+        findings.write_text(
+            json.dumps({"candidate_signals": [], "clusters": [], "created_proposals": [], "approval_proposal_ids": []}),
+            encoding="utf-8",
+        )
         completed = json.loads(self.run_script(
             "session_batch.py",
             "complete",
@@ -354,7 +269,10 @@ class ImproverTest(unittest.TestCase):
 
             findings = self.control / "runtime" / "drafts" / "findings.json"
             findings.parent.mkdir(parents=True, exist_ok=True)
-            findings.write_text(json.dumps({"clusters": [], "created_proposals": []}), encoding="utf-8")
+            findings.write_text(
+                json.dumps({"candidate_signals": [], "clusters": [], "created_proposals": [], "approval_proposal_ids": []}),
+                encoding="utf-8",
+            )
             completed = json.loads(self.run_script(
                 "session_batch.py",
                 "complete",
@@ -371,6 +289,189 @@ class ImproverTest(unittest.TestCase):
         self.assertEqual(batch_sizes, [3, 3, 1])
         self.assertEqual(len(seen_paths), 7)
         self.assertFalse((runtime_dir(self.control) / "replay.json").exists())
+
+    def test_replay_carries_candidate_signals_and_rejects_silent_drops(self) -> None:
+        self.config["max_sessions_per_run"] = 1
+        (self.control / "config.json").write_text(json.dumps(self.config), encoding="utf-8")
+        self.write_session("session-one.jsonl", session_id="thr-one")
+        self.write_session("session-two.jsonl", session_id="thr-two")
+
+        first = json.loads(self.run_script(
+            "session_batch.py",
+            "start",
+            "--control-root",
+            str(self.control),
+            "--reprocess-days",
+            "1",
+        ).stdout)
+        signal = {
+            "root_cause_key": "missing-validator-dependency",
+            "summary": "Validation repeatedly needs a fallback runtime",
+            "source_session_ids": ["thr-one"],
+            "status": "open",
+        }
+        findings = self.control / "runtime" / "drafts" / "findings.json"
+        findings.parent.mkdir(parents=True, exist_ok=True)
+        findings.write_text(
+            json.dumps({"candidate_signals": [signal], "clusters": [], "created_proposal_ids": [], "approval_proposal_ids": []}),
+            encoding="utf-8",
+        )
+        self.run_script(
+            "session_batch.py",
+            "complete",
+            "--control-root",
+            str(self.control),
+            "--batch-id",
+            first["batch_id"],
+            "--findings",
+            str(findings),
+        )
+
+        second = json.loads(self.run_script(
+            "session_batch.py",
+            "start",
+            "--control-root",
+            str(self.control),
+            "--reprocess-days",
+            "1",
+        ).stdout)
+        campaign = second["campaign_findings"]
+        self.assertEqual(campaign["replay_id"], first["selection"]["replay_id"])
+        self.assertEqual(
+            campaign["latest_findings"]["candidate_signals"][0]["root_cause_key"],
+            "missing-validator-dependency",
+        )
+
+        findings.write_text(
+            json.dumps({"candidate_signals": [], "clusters": [], "created_proposal_ids": [], "approval_proposal_ids": []}),
+            encoding="utf-8",
+        )
+        rejected = self.run_script(
+            "session_batch.py",
+            "complete",
+            "--control-root",
+            str(self.control),
+            "--batch-id",
+            second["batch_id"],
+            "--findings",
+            str(findings),
+            check=False,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("retain prior candidate signals", rejected.stderr)
+
+        retained = dict(signal)
+        retained["source_session_ids"] = ["thr-one", "thr-two"]
+        findings.write_text(
+            json.dumps({"candidate_signals": [retained], "clusters": [], "created_proposal_ids": [], "approval_proposal_ids": []}),
+            encoding="utf-8",
+        )
+        completed = self.run_script(
+            "session_batch.py",
+            "complete",
+            "--control-root",
+            str(self.control),
+            "--batch-id",
+            second["batch_id"],
+            "--findings",
+            str(findings),
+        )
+        self.assertEqual(json.loads(completed.stdout)["status"], "completed")
+
+    def test_completion_surfaces_an_existing_pending_proposal_without_task_binding(self) -> None:
+        target = self.project / "existing-pending.md"
+        target.write_text("before\n", encoding="utf-8")
+        proposal_id = self.proposal_id(
+            self.run_script(
+                "proposal_tool.py",
+                "create",
+                "--control-root",
+                str(self.control),
+                "--draft",
+                str(self.create_draft(target, "after\n")),
+            ).stdout
+        )
+        batch = json.loads(
+            self.run_script("session_batch.py", "start", "--control-root", str(self.control)).stdout
+        )
+        findings = self.control / "runtime" / "drafts" / "findings.json"
+        findings.write_text(
+            json.dumps(
+                {
+                    "candidate_signals": [],
+                    "clusters": [],
+                    "created_proposal_ids": [],
+                    "approval_proposal_ids": [proposal_id],
+                }
+            ),
+            encoding="utf-8",
+        )
+        completed = json.loads(
+            self.run_script(
+                "session_batch.py",
+                "complete",
+                "--control-root",
+                str(self.control),
+                "--batch-id",
+                batch["batch_id"],
+                "--findings",
+                str(findings),
+            ).stdout
+        )
+        self.assertEqual(completed["approval_proposal_ids"], [proposal_id])
+        self.assertEqual(completed["proposals"][0]["id"], proposal_id)
+        self.assertEqual(completed["proposals"][0]["origin"], "already-pending")
+        self.assertEqual(completed["proposals"][0]["target"], f"local — {target.resolve()}")
+        self.assertNotIn("approval_question", completed)
+        self.assertEqual(read_json(Path(completed["findings"]))["approval_proposal_ids"], [proposal_id])
+
+    def test_completion_rejects_a_created_proposal_omitted_from_presentation(self) -> None:
+        target = self.project / "new-pending.md"
+        target.write_text("before\n", encoding="utf-8")
+        proposal_id = self.proposal_id(
+            self.run_script(
+                "proposal_tool.py",
+                "create",
+                "--control-root",
+                str(self.control),
+                "--draft",
+                str(self.create_draft(target, "after\n")),
+            ).stdout
+        )
+        batch = json.loads(
+            self.run_script("session_batch.py", "start", "--control-root", str(self.control)).stdout
+        )
+        findings = self.control / "runtime" / "drafts" / "findings.json"
+        findings.write_text(
+            json.dumps(
+                {
+                    "candidate_signals": [],
+                    "clusters": [],
+                    "created_proposal_ids": [proposal_id],
+                    "approval_proposal_ids": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        rejected = self.run_script(
+            "session_batch.py",
+            "complete",
+            "--control-root",
+            str(self.control),
+            "--batch-id",
+            batch["batch_id"],
+            "--findings",
+            str(findings),
+            check=False,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("must be included in the presented proposal set", rejected.stderr)
+
+    def test_rubric_keeps_recovered_and_self_update_friction(self) -> None:
+        rubric = (SCRIPTS.parent / "references" / "rubric.md").read_text(encoding="utf-8")
+        self.assertIn("Recovery is not resolution", rubric)
+        self.assertIn("update the local setup", rubric)
+        self.assertIn("does not erase the friction", rubric)
 
     def test_reprocessing_window_excludes_older_sessions(self) -> None:
         path = self.write_session()
@@ -666,29 +767,8 @@ class ImproverTest(unittest.TestCase):
         self.assertEqual(call.args[3]["changes"][0]["desired_content"], desired)
         self.assertEqual(read_json(directory / "manifest.json")["status"], "applied")
 
-    def test_approved_proposal_applies_exact_content(self) -> None:
+    def test_explicit_proposal_id_applies_exact_content(self) -> None:
         target = self.project / "AGENTS.md"
-        target.write_text("before\n", encoding="utf-8")
-        draft = self.create_draft(target, "after\n")
-        created = self.run_script("proposal_tool.py", "create", "--control-root", str(self.control), "--draft", str(draft))
-        proposal_id = self.proposal_id(created.stdout)
-        self.approve(proposal_id)
-        applied = self.run_script(
-            "apply_proposals.py",
-            "--control-root",
-            str(self.control),
-            "--session-id",
-            "session-a",
-            "--turn-id",
-            "turn-a",
-        )
-        self.assertEqual(target.read_text(encoding="utf-8"), "after\n")
-        self.assertEqual(json.loads(applied.stdout)["results"][0]["status"], "applied")
-        receipt = read_json(receipt_path(self.control, "session-a", "turn-a"))
-        self.assertIsNotNone(receipt["consumed_at"])
-
-    def test_task_bound_question_accepts_natural_yes_and_applies(self) -> None:
-        target = self.project / "natural.md"
         target.write_text("before\n", encoding="utf-8")
         proposal_id = self.proposal_id(
             self.run_script(
@@ -700,213 +780,68 @@ class ImproverTest(unittest.TestCase):
                 str(self.create_draft(target, "after\n")),
             ).stdout
         )
-        self.ask_approval(proposal_id)
-        rendered = self.run_script(
-            "approval_prompt.py",
+        applied = self.run_script(
+            "apply_proposals.py",
             "--control-root",
             str(self.control),
             "--proposal-id",
             proposal_id,
         )
-        question = json.loads(rendered.stdout)["question"]
-        self.assertIn("Reply yes to apply it or no to reject it.", question)
-        self.assertEqual(
-            question,
-            f"Reply yes to apply it or no to reject it. Would you like to apply the frozen proposal {proposal_id}?",
-        )
-
-        prompt = "Аппрувлю эту правку"
-        hook = self.run_script(
-            "hook_dispatch.py",
-            "user-prompt",
-            "--control-root",
-            str(self.control),
-            input_value={"prompt": prompt, "session_id": "session-a", "turn_id": "answer-turn"},
-        )
-        context = json.loads(hook.stdout)["hookSpecificOutput"]["additionalContext"]
-        self.assertIn("--session-id session-a --turn-id answer-turn", context)
-        receipt = read_json(receipt_path(self.control, "session-a", "answer-turn"))
-        self.assertEqual(receipt["proposal_ids"], [proposal_id])
-        self.assertEqual(receipt["approval_kind"], "question-response")
-
-        transcript = self.write_turn_transcript(prompt, "session-a", "answer-turn")
-        direct = (
-            f"{sys.executable} {SCRIPTS / 'apply_proposals.py'} "
-            f"--control-root {self.control} --session-id session-a --turn-id answer-turn"
-        )
-        authorized = self.run_script(
-            "hook_dispatch.py",
-            "pre-tool",
-            "--control-root",
-            str(self.control),
-            input_value={
-                "session_id": "session-a",
-                "turn_id": "answer-turn",
-                "transcript_path": str(transcript),
-                "tool_name": "Bash",
-                "tool_input": {"command": direct},
-            },
-        )
-        self.assertEqual(authorized.stdout, "")
-        applied = self.run_script(
-            "apply_proposals.py",
-            "--control-root",
-            str(self.control),
-            "--session-id",
-            "session-a",
-            "--turn-id",
-            "answer-turn",
-        )
-        self.assertEqual(json.loads(applied.stdout)["results"][0]["status"], "applied")
         self.assertEqual(target.read_text(encoding="utf-8"), "after\n")
+        self.assertEqual(json.loads(applied.stdout)["results"][0]["status"], "applied")
 
-    def test_multi_proposal_prompt_ends_with_a_direct_question(self) -> None:
-        proposal_ids = []
-        for index in range(3):
-            target = self.project / f"proposal-{index}.md"
-            target.write_text("before\n", encoding="utf-8")
-            created = self.run_script(
-                "proposal_tool.py",
-                "create",
-                "--control-root",
-                str(self.control),
-                "--draft",
-                str(self.create_draft(target, "after\n")),
-            )
-            proposal_ids.append(self.proposal_id(created.stdout))
-
-        rendered = self.run_script(
-            "approval_prompt.py",
-            "--control-root",
-            str(self.control),
-            *(argument for proposal_id in proposal_ids for argument in ("--proposal-id", proposal_id)),
-        )
-        question = json.loads(rendered.stdout)["question"]
-        example = ", ".join(
-            f"{index} {'yes' if index < len(proposal_ids) else 'no'}"
-            for index in range(1, len(proposal_ids) + 1)
-        )
-        self.assertEqual(
-            question,
-            f"Answer each question independently in one reply (for example: {example}).\n"
-            + "\n".join(
-                f"{index}. Would you like to apply the frozen proposal {proposal_id}?"
-                for index, proposal_id in enumerate(proposal_ids, 1)
-            ),
-        )
-        self.assertTrue(question.endswith("?"))
-
-    def test_task_bound_questions_apply_only_individually_approved_proposals(self) -> None:
-        proposal_ids = []
+    def test_explicit_multi_selection_applies_only_named_proposals(self) -> None:
         targets = []
+        proposal_ids = []
         for index in range(3):
-            target = self.project / f"partial-{index}.md"
+            target = self.project / f"selected-{index}.md"
             target.write_text("before\n", encoding="utf-8")
             targets.append(target)
-            created = self.run_script(
-                "proposal_tool.py",
-                "create",
-                "--control-root",
-                str(self.control),
-                "--draft",
-                str(self.create_draft(target, "after\n")),
+            proposal_ids.append(
+                self.proposal_id(
+                    self.run_script(
+                        "proposal_tool.py",
+                        "create",
+                        "--control-root",
+                        str(self.control),
+                        "--draft",
+                        str(self.create_draft(target, "after\n")),
+                    ).stdout
+                )
             )
-            proposal_ids.append(self.proposal_id(created.stdout))
 
-        self.ask_approval(*proposal_ids)
-        prompt = "1 да, 2 нет, 3 yes"
-        hook = self.run_script(
-            "hook_dispatch.py",
-            "user-prompt",
-            "--control-root",
-            str(self.control),
-            input_value={"prompt": prompt, "session_id": "session-a", "turn_id": "partial-turn"},
-        )
-        context = json.loads(hook.stdout)["hookSpecificOutput"]["additionalContext"]
-        self.assertIn(f"{proposal_ids[0]}, {proposal_ids[2]}", context)
-        self.assertIn(f"Rejected proposals: {proposal_ids[1]}", context)
-        receipt = read_json(receipt_path(self.control, "session-a", "partial-turn"))
-        self.assertEqual(receipt["proposal_ids"], [proposal_ids[0], proposal_ids[2]])
-
-        transcript = self.write_turn_transcript(prompt, "session-a", "partial-turn")
-        direct = (
-            f"{sys.executable} {SCRIPTS / 'apply_proposals.py'} "
-            f"--control-root {self.control} --session-id session-a --turn-id partial-turn"
-        )
-        authorized = self.run_script(
-            "hook_dispatch.py",
-            "pre-tool",
-            "--control-root",
-            str(self.control),
-            input_value={
-                "session_id": "session-a",
-                "turn_id": "partial-turn",
-                "transcript_path": str(transcript),
-                "tool_name": "Bash",
-                "tool_input": {"command": direct},
-            },
-        )
-        self.assertEqual(authorized.stdout, "")
         applied = self.run_script(
             "apply_proposals.py",
             "--control-root",
             str(self.control),
-            "--session-id",
-            "session-a",
-            "--turn-id",
-            "partial-turn",
+            "--proposal-id",
+            proposal_ids[0],
+            "--proposal-id",
+            proposal_ids[2],
         )
-        statuses = [result["status"] for result in json.loads(applied.stdout)["results"]]
-        self.assertEqual(statuses, ["applied", "applied"])
+        self.assertEqual(
+            [item["status"] for item in json.loads(applied.stdout)["results"]],
+            ["applied", "applied"],
+        )
         self.assertEqual(
             [target.read_text(encoding="utf-8") for target in targets],
             ["after\n", "before\n", "after\n"],
         )
-        rejected_manifest = read_json(
-            runtime_dir(self.control) / "proposals" / proposal_ids[1] / "manifest.json"
-        )
-        self.assertEqual(rejected_manifest["status"], "rejected")
+        untouched = read_json(runtime_dir(self.control) / "proposals" / proposal_ids[1] / "manifest.json")
+        self.assertEqual(untouched["status"], "pending")
 
-    def test_task_bound_question_rejects_on_natural_no(self) -> None:
-        target = self.project / "rejected.md"
-        target.write_text("before\n", encoding="utf-8")
-        proposal_id = self.proposal_id(
-            self.run_script(
-                "proposal_tool.py",
-                "create",
-                "--control-root",
-                str(self.control),
-                "--draft",
-                str(self.create_draft(target, "after\n")),
-            ).stdout
-        )
-        self.ask_approval(proposal_id)
-        hook = self.run_script(
-            "hook_dispatch.py",
-            "user-prompt",
-            "--control-root",
-            str(self.control),
-            input_value={"prompt": "нет", "session_id": "session-a", "turn_id": "answer-turn"},
-        )
-        self.assertIn("must not be applied", json.loads(hook.stdout)["hookSpecificOutput"]["additionalContext"])
-        manifest = read_json(runtime_dir(self.control) / "proposals" / proposal_id / "manifest.json")
-        self.assertEqual(manifest["status"], "rejected")
-        self.assertEqual(target.read_text(encoding="utf-8"), "before\n")
-        self.assertFalse(receipt_path(self.control, "session-a", "answer-turn").exists())
-
-    def test_natural_yes_without_task_bound_question_is_ignored(self) -> None:
+    def test_applier_requires_an_explicit_proposal_id(self) -> None:
         result = self.run_script(
-            "hook_dispatch.py",
-            "user-prompt",
+            "apply_proposals.py",
             "--control-root",
             str(self.control),
-            input_value={"prompt": "yes", "session_id": "session-a", "turn_id": "answer-turn"},
+            check=False,
         )
-        self.assertEqual(result.stdout, "")
-        self.assertFalse(receipt_path(self.control, "session-a", "answer-turn").exists())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--proposal-id", result.stderr)
 
-    def test_natural_yes_cannot_approve_another_tasks_question(self) -> None:
-        target = self.project / "cross-task.md"
+    def test_hash_mismatch_marks_explicit_proposal_stale_without_writing(self) -> None:
+        target = self.project / "stale.md"
         target.write_text("before\n", encoding="utf-8")
         proposal_id = self.proposal_id(
             self.run_script(
@@ -918,346 +853,42 @@ class ImproverTest(unittest.TestCase):
                 str(self.create_draft(target, "after\n")),
             ).stdout
         )
-        self.ask_approval(proposal_id, session_id="session-a")
-        result = self.run_script(
-            "hook_dispatch.py",
-            "user-prompt",
-            "--control-root",
-            str(self.control),
-            input_value={"prompt": "yes", "session_id": "session-b", "turn_id": "answer-turn"},
-        )
-        self.assertEqual(result.stdout, "")
-        self.assertFalse(receipt_path(self.control, "session-b", "answer-turn").exists())
-
-    def test_qualified_answer_cancels_question_instead_of_approving_later_yes(self) -> None:
-        target = self.project / "qualified.md"
-        target.write_text("before\n", encoding="utf-8")
-        proposal_id = self.proposal_id(
-            self.run_script(
-                "proposal_tool.py",
-                "create",
-                "--control-root",
-                str(self.control),
-                "--draft",
-                str(self.create_draft(target, "after\n")),
-            ).stdout
-        )
-        self.ask_approval(proposal_id)
-        ambiguous = self.run_script(
-            "hook_dispatch.py",
-            "user-prompt",
-            "--control-root",
-            str(self.control),
-            input_value={
-                "prompt": "yes, but change the target",
-                "session_id": "session-a",
-                "turn_id": "ambiguous-turn",
-            },
-        )
-        self.assertIn("question is cancelled", json.loads(ambiguous.stdout)["hookSpecificOutput"]["additionalContext"])
-        question = read_json(question_path(self.control, "session-a"))
-        self.assertEqual(question["status"], "cancelled")
-
-        later = self.run_script(
-            "hook_dispatch.py",
-            "user-prompt",
-            "--control-root",
-            str(self.control),
-            input_value={"prompt": "yes", "session_id": "session-a", "turn_id": "later-turn"},
-        )
-        self.assertEqual(later.stdout, "")
-        self.assertFalse(receipt_path(self.control, "session-a", "later-turn").exists())
-        self.assertEqual(target.read_text(encoding="utf-8"), "before\n")
-
-    def test_removed_approval_command_cancels_active_question(self) -> None:
-        target = self.project / "asked.md"
-        target.write_text("before\n", encoding="utf-8")
-        proposal_id = self.proposal_id(
-            self.run_script(
-                "proposal_tool.py",
-                "create",
-                "--control-root",
-                str(self.control),
-                "--draft",
-                str(self.create_draft(target, "after\n")),
-            ).stdout
-        )
-        self.ask_approval(proposal_id)
-        removed = self.run_script(
-            "hook_dispatch.py",
-            "user-prompt",
-            "--control-root",
-            str(self.control),
-            input_value={
-                "prompt": f"APPROVE {proposal_id}",
-                "session_id": "session-a",
-                "turn_id": "removed-command-turn",
-            },
-        )
-        self.assertIn("question is cancelled", json.loads(removed.stdout)["hookSpecificOutput"]["additionalContext"])
-        question = read_json(question_path(self.control, "session-a"))
-        self.assertEqual(question["status"], "cancelled")
-        self.assertFalse(receipt_path(self.control, "session-a", "removed-command-turn").exists())
-
-    def test_hash_mismatch_marks_stale_without_writing(self) -> None:
-        target = self.project / "AGENTS.md"
-        target.write_text("before\n", encoding="utf-8")
-        draft = self.create_draft(target, "after\n")
-        created = self.run_script("proposal_tool.py", "create", "--control-root", str(self.control), "--draft", str(draft))
-        proposal_id = self.proposal_id(created.stdout)
         target.write_text("user changed it\n", encoding="utf-8")
-        self.approve(proposal_id)
         applied = self.run_script(
             "apply_proposals.py",
             "--control-root",
             str(self.control),
-            "--session-id",
-            "session-a",
-            "--turn-id",
-            "turn-a",
+            "--proposal-id",
+            proposal_id,
             check=False,
         )
         self.assertEqual(target.read_text(encoding="utf-8"), "user changed it\n")
         self.assertEqual(json.loads(applied.stdout)["results"][0]["status"], "stale")
 
-    def test_failed_skill_validation_rolls_back(self) -> None:
+    def test_failed_skill_validation_rolls_back_explicit_proposal(self) -> None:
         target = self.project / ".agents" / "skills" / "bad-skill" / "SKILL.md"
         target.parent.mkdir(parents=True)
         target.write_text("---\nname: bad-skill\ndescription: valid\n---\n", encoding="utf-8")
-        draft = self.create_draft(target, "not valid frontmatter\n")
-        created = self.run_script("proposal_tool.py", "create", "--control-root", str(self.control), "--draft", str(draft))
-        proposal_id = self.proposal_id(created.stdout)
-        self.approve(proposal_id)
+        proposal_id = self.proposal_id(
+            self.run_script(
+                "proposal_tool.py",
+                "create",
+                "--control-root",
+                str(self.control),
+                "--draft",
+                str(self.create_draft(target, "not valid frontmatter\n")),
+            ).stdout
+        )
         applied = self.run_script(
             "apply_proposals.py",
             "--control-root",
             str(self.control),
-            "--session-id",
-            "session-a",
-            "--turn-id",
-            "turn-a",
+            "--proposal-id",
+            proposal_id,
             check=False,
         )
         self.assertEqual(target.read_text(encoding="utf-8"), "---\nname: bad-skill\ndescription: valid\n---\n")
         self.assertEqual(json.loads(applied.stdout)["results"][0]["status"], "failed")
-
-    def test_removed_approval_command_without_question_is_ignored(self) -> None:
-        result = self.run_script(
-            "hook_dispatch.py",
-            "user-prompt",
-            "--control-root",
-            str(self.control),
-            input_value={"prompt": "APPROVE P-20260802-99", "session_id": "s", "turn_id": "t"},
-        )
-        self.assertEqual(result.stdout, "")
-        self.assertFalse(receipt_path(self.control, "s", "t").exists())
-
-    def test_pretool_rejects_removed_current_approval_flag(self) -> None:
-        transcript = self.write_turn_transcript("yes", "s", "t")
-        removed_command = (
-            f"{sys.executable} {SCRIPTS / 'apply_proposals.py'} "
-            f"--control-root {self.control} --from-current-approval"
-        )
-        result = self.run_script(
-            "hook_dispatch.py",
-            "pre-tool",
-            "--control-root",
-            str(self.control),
-            input_value={
-                "session_id": "s",
-                "turn_id": "t",
-                "transcript_path": str(transcript),
-                "tool_name": "Bash",
-                "tool_input": {"command": removed_command},
-            },
-        )
-        self.assertIn("receipt-bound command issued after an active approval question", result.stdout)
-        self.assertFalse(receipt_path(self.control, "s", "t").exists())
-
-    def test_pretool_rejects_cross_task_transcript(self) -> None:
-        transcript = self.write_turn_transcript("yes", "other-session", "t")
-        direct = (
-            f"{sys.executable} {SCRIPTS / 'apply_proposals.py'} "
-            f"--control-root {self.control} --session-id s --turn-id t"
-        )
-        result = self.run_script(
-            "hook_dispatch.py",
-            "pre-tool",
-            "--control-root",
-            str(self.control),
-            input_value={
-                "session_id": "s",
-                "turn_id": "t",
-                "transcript_path": str(transcript),
-                "tool_name": "Bash",
-                "tool_input": {"command": direct},
-            },
-        )
-        self.assertIn("another task", result.stdout)
-        self.assertFalse(receipt_path(self.control, "s", "t").exists())
-
-    def test_pretool_rejects_direct_apply_without_receipt(self) -> None:
-        target = self.project / "direct.md"
-        target.write_text("before\n", encoding="utf-8")
-        proposal_id = self.proposal_id(
-            self.run_script(
-                "proposal_tool.py",
-                "create",
-                "--control-root",
-                str(self.control),
-                "--draft",
-                str(self.create_draft(target, "after\n")),
-            ).stdout
-        )
-        transcript = self.write_turn_transcript("yes", "s", "t")
-        direct = (
-            f"{sys.executable} {SCRIPTS / 'apply_proposals.py'} "
-            f"--control-root {self.control} --session-id s --turn-id t"
-        )
-        result = self.run_script(
-            "hook_dispatch.py",
-            "pre-tool",
-            "--control-root",
-            str(self.control),
-            input_value={
-                "session_id": "s",
-                "turn_id": "t",
-                "transcript_path": str(transcript),
-                "tool_name": "Bash",
-                "tool_input": {"command": direct},
-            },
-        )
-        self.assertIn("matching unconsumed approval receipt", result.stdout)
-
-    def test_pretool_allows_receipt_bound_direct_apply_after_question(self) -> None:
-        target = self.project / "question.md"
-        target.write_text("before\n", encoding="utf-8")
-        proposal_id = self.proposal_id(
-            self.run_script(
-                "proposal_tool.py",
-                "create",
-                "--control-root",
-                str(self.control),
-                "--draft",
-                str(self.create_draft(target, "after\n")),
-            ).stdout
-        )
-        self.ask_approval(proposal_id, session_id="s")
-        prompt = "yes"
-        transcript = self.write_turn_transcript(prompt, "s", "t")
-        prompt_result = self.run_script(
-            "hook_dispatch.py",
-            "user-prompt",
-            "--control-root",
-            str(self.control),
-            input_value={"prompt": prompt, "session_id": "s", "turn_id": "t"},
-        )
-        self.assertIn("receipt-bound command once", json.loads(prompt_result.stdout)["hookSpecificOutput"]["additionalContext"])
-        direct = (
-            f"{sys.executable} {SCRIPTS / 'apply_proposals.py'} "
-            f"--control-root {self.control} --session-id s --turn-id t"
-        )
-        result = self.run_script(
-            "hook_dispatch.py",
-            "pre-tool",
-            "--control-root",
-            str(self.control),
-            input_value={
-                "session_id": "s",
-                "turn_id": "t",
-                "transcript_path": str(transcript),
-                "tool_name": "Bash",
-                "tool_input": {"command": direct},
-            },
-        )
-        self.assertEqual(result.stdout, "")
-
-    def test_assistant_approval_text_is_not_treated_as_user_approval(self) -> None:
-        transcript = self.write_turn_transcript("Review the proposal", "s", "t", "yes")
-        direct = (
-            f"{sys.executable} {SCRIPTS / 'apply_proposals.py'} "
-            f"--control-root {self.control} --session-id s --turn-id t"
-        )
-        result = self.run_script(
-            "hook_dispatch.py",
-            "pre-tool",
-            "--control-root",
-            str(self.control),
-            input_value={
-                "session_id": "s",
-                "turn_id": "t",
-                "transcript_path": str(transcript),
-                "tool_name": "Bash",
-                "tool_input": {"command": direct},
-            },
-        )
-        self.assertIn("matching unconsumed approval receipt", result.stdout)
-
-    def test_pretool_allows_drafts_and_denies_control_or_external_writes(self) -> None:
-        allowed_patch = {
-            "tool_name": "apply_patch",
-            "tool_input": {"command": "*** Begin Patch\n*** Add File: runtime/drafts/a.json\n+{}\n*** End Patch"},
-        }
-        allowed = self.run_script(
-            "hook_dispatch.py", "pre-tool", "--control-root", str(self.control), input_value=allowed_patch
-        )
-        self.assertEqual(allowed.stdout, "")
-        denied_patch = {
-            "tool_name": "apply_patch",
-            "tool_input": {"command": "*** Begin Patch\n*** Update File: config.json\n+unsafe\n*** End Patch"},
-        }
-        denied = self.run_script(
-            "hook_dispatch.py", "pre-tool", "--control-root", str(self.control), input_value=denied_patch
-        )
-        self.assertIn('"permissionDecision": "deny"', denied.stdout)
-        external = {
-            "tool_name": "Bash",
-            "tool_input": {"command": f"cp file {self.project / 'AGENTS.md'}"},
-        }
-        denied_external = self.run_script(
-            "hook_dispatch.py", "pre-tool", "--control-root", str(self.control), input_value=external
-        )
-        self.assertIn('"permissionDecision": "deny"', denied_external.stdout)
-
-    def test_partial_multi_approval(self) -> None:
-        first = self.project / "first.md"
-        second = self.project / "second.md"
-        first.write_text("one\n", encoding="utf-8")
-        second.write_text("two\n", encoding="utf-8")
-        first_id = self.proposal_id(
-            self.run_script(
-                "proposal_tool.py",
-                "create",
-                "--control-root",
-                str(self.control),
-                "--draft",
-                str(self.create_draft(first, "ONE\n")),
-            ).stdout
-        )
-        second_id = self.proposal_id(
-            self.run_script(
-                "proposal_tool.py",
-                "create",
-                "--control-root",
-                str(self.control),
-                "--draft",
-                str(self.create_draft(second, "TWO\n")),
-            ).stdout
-        )
-        self.approve(first_id)
-        self.run_script(
-            "apply_proposals.py",
-            "--control-root",
-            str(self.control),
-            "--session-id",
-            "session-a",
-            "--turn-id",
-            "turn-a",
-        )
-        self.assertEqual(first.read_text(encoding="utf-8"), "ONE\n")
-        self.assertEqual(second.read_text(encoding="utf-8"), "two\n")
-        second_manifest = read_json(runtime_dir(self.control) / "proposals" / second_id / "manifest.json")
-        self.assertEqual(second_manifest["status"], "pending")
 
 
 if __name__ == "__main__":

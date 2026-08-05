@@ -18,12 +18,14 @@ from improver_lib import (
     ensure_runtime,
     iso,
     load_config,
+    load_manifest,
     now,
     parse_session,
     parse_iso,
     path_fingerprint,
     print_json,
     prune_runtime,
+    proposal_list_data,
     read_json,
     redact_obj,
     runtime_dir,
@@ -45,6 +47,131 @@ def recent_findings(control_root: Path, retention_days: int) -> list[dict[str, A
         except OSError:
             continue
     return values[-20:]
+
+
+def replay_findings(control_root: Path, replay_id: str) -> list[dict[str, Any]]:
+    """Return persisted, redacted findings for one replay campaign."""
+    values: list[dict[str, Any]] = []
+    root = runtime_dir(control_root) / "findings"
+    for path in sorted(root.glob("*.json")):
+        try:
+            value = read_json(path)
+        except OSError:
+            continue
+        if not isinstance(value, dict):
+            continue
+        selection = value.get("selection")
+        if isinstance(selection, dict) and selection.get("replay_id") == replay_id:
+            values.append(value)
+    return values
+
+
+def campaign_findings(control_root: Path, selection: dict[str, Any]) -> dict[str, Any] | None:
+    """Build the bounded cumulative context supplied to the next replay batch."""
+    replay_id = selection.get("replay_id")
+    if selection.get("mode") != "reprocess" or not isinstance(replay_id, str):
+        return None
+    values = replay_findings(control_root, replay_id)
+    proposal_ids: list[str] = []
+    for value in values:
+        created = value.get("created_proposal_ids", value.get("created_proposals", []))
+        if isinstance(created, list):
+            for proposal_id in created:
+                if isinstance(proposal_id, str) and proposal_id not in proposal_ids:
+                    proposal_ids.append(proposal_id)
+    return {
+        "replay_id": replay_id,
+        "latest_findings": values[-1] if values else None,
+        "created_proposal_ids": proposal_ids,
+    }
+
+
+def candidate_signal_keys(findings: dict[str, Any]) -> set[str]:
+    signals = findings.get("candidate_signals")
+    if not isinstance(signals, list):
+        raise RuntimeError("Findings require a candidate_signals array")
+    keys: set[str] = set()
+    allowed_statuses = {"open", "proposed", "durably_resolved", "discarded"}
+    for signal in signals:
+        if not isinstance(signal, dict):
+            raise RuntimeError("Each candidate signal must be an object")
+        key = signal.get("root_cause_key")
+        if not isinstance(key, str) or not key.strip() or len(key) > 120:
+            raise RuntimeError("Each candidate signal requires a short root_cause_key")
+        if key in keys:
+            raise RuntimeError(f"Duplicate candidate signal root_cause_key: {key}")
+        summary = signal.get("summary")
+        if not isinstance(summary, str) or not summary.strip():
+            raise RuntimeError(f"Candidate signal {key} requires a summary")
+        source_session_ids = signal.get("source_session_ids")
+        if not isinstance(source_session_ids, list) or not source_session_ids or not all(
+            isinstance(session_id, str) and session_id for session_id in source_session_ids
+        ):
+            raise RuntimeError(f"Candidate signal {key} requires source_session_ids")
+        if signal.get("status") not in allowed_statuses:
+            raise RuntimeError(f"Candidate signal {key} has an invalid status")
+        keys.add(key)
+    return keys
+
+
+def validate_findings(findings: dict[str, Any], prior_campaign: dict[str, Any] | None) -> None:
+    current_keys = candidate_signal_keys(findings)
+    if not prior_campaign:
+        return
+    previous = prior_campaign.get("latest_findings")
+    if not isinstance(previous, dict):
+        return
+    previous_signals = previous.get("candidate_signals", [])
+    if not isinstance(previous_signals, list):
+        return
+    previous_keys = {
+        signal.get("root_cause_key")
+        for signal in previous_signals
+        if isinstance(signal, dict) and isinstance(signal.get("root_cause_key"), str)
+    }
+    missing = sorted(previous_keys - current_keys)
+    if missing:
+        raise RuntimeError(
+            "Replay findings must retain prior candidate signals; update their status instead of dropping: "
+            + ", ".join(missing)
+        )
+
+
+def validated_approval_proposal_ids(
+    control_root: Path,
+    findings: dict[str, Any],
+    prior_campaign: dict[str, Any] | None,
+    limit: int,
+) -> list[str]:
+    proposal_ids = findings.get("approval_proposal_ids")
+    if not isinstance(proposal_ids, list) or not all(isinstance(item, str) for item in proposal_ids):
+        raise RuntimeError("Findings require an approval_proposal_ids array")
+    if len(proposal_ids) != len(set(proposal_ids)):
+        raise RuntimeError("approval_proposal_ids must not contain duplicates")
+    if len(proposal_ids) > limit:
+        raise RuntimeError(f"approval_proposal_ids may contain at most {limit} proposals")
+
+    created = findings.get("created_proposal_ids", findings.get("created_proposals", []))
+    if not isinstance(created, list) or not all(isinstance(item, str) for item in created):
+        raise RuntimeError("created_proposal_ids must be an array of proposal IDs")
+    campaign_created = prior_campaign.get("created_proposal_ids", []) if prior_campaign else []
+    required = list(dict.fromkeys([*campaign_created, *created]))
+    omitted = [proposal_id for proposal_id in required if proposal_id not in proposal_ids]
+    if omitted:
+        raise RuntimeError(
+            "Every proposal created in this review must be included in the presented proposal set: "
+            + ", ".join(omitted)
+        )
+
+    for proposal_id in proposal_ids:
+        try:
+            _, manifest = load_manifest(control_root, proposal_id)
+            pending = manifest.get("status") == "pending" and parse_iso(manifest["expiry_at"]) > now()
+        except Exception:
+            pending = False
+        if not pending:
+            raise RuntimeError(f"Presented proposal is not pending and unexpired: {proposal_id}")
+    return proposal_ids
 
 
 def pending_batch(control_root: Path) -> tuple[Path, dict[str, Any]] | None:
@@ -230,6 +357,7 @@ def emit_batch(control_root: Path, config: dict[str, Any], batch_path: Path, bat
         if batch.get("selection", {}).get("mode") == "reprocess":
             batch["selection"]["has_more"] = True
         atomic_json(batch_path, batch)
+    selection = batch.get("selection", {"mode": "incremental"})
     print_json(
         {
             "batch_id": batch["batch_id"],
@@ -239,9 +367,10 @@ def emit_batch(control_root: Path, config: dict[str, Any], batch_path: Path, bat
             "skipped": skipped,
             "host_errors": batch.get("host_errors", []),
             "host_discovery": batch.get("host_discovery", {}),
-            "selection": batch.get("selection", {"mode": "incremental"}),
+            "selection": selection,
             "deferred_sessions": len(deferred),
             "recent_findings": recent_findings(control_root, int(config.get("retention_days", 90))),
+            "campaign_findings": campaign_findings(control_root, selection),
         }
     )
 
@@ -331,6 +460,14 @@ def complete(args: argparse.Namespace) -> int:
     if not isinstance(findings, dict):
         raise RuntimeError("Findings must be a JSON object")
     selection = batch.get("selection", {"mode": "incremental"})
+    prior_campaign = campaign_findings(control_root, selection)
+    validate_findings(findings, prior_campaign)
+    approval_proposal_ids = validated_approval_proposal_ids(
+        control_root,
+        findings,
+        prior_campaign,
+        int(config.get("max_proposals_per_run", 3)),
+    )
     state_path: Path | None = None
     replay: dict[str, Any] | None = None
     if selection.get("mode") == "reprocess":
@@ -342,7 +479,7 @@ def complete(args: argparse.Namespace) -> int:
     sanitized = redact_obj(findings, 3000)
     sanitized.update(
         {
-            "schema_version": 2,
+            "schema_version": 3,
             "batch_id": args.batch_id,
             "completed_at": iso(),
             "selection": batch.get("selection", {"mode": "incremental"}),
@@ -361,6 +498,7 @@ def complete(args: argparse.Namespace) -> int:
     cursor["last_success_at"] = iso()
     cursor["last_batch_id"] = args.batch_id
     atomic_json(cursor_path, cursor)
+    finish_replay = False
     if replay is not None and state_path is not None:
         for item in batch.get("items", []):
             processed_for(replay, str(item.get("host", "local")))[item["path"]] = item["fingerprint"]
@@ -369,7 +507,18 @@ def complete(args: argparse.Namespace) -> int:
             replay["updated_at"] = iso()
             atomic_json(state_path, replay)
         else:
-            state_path.unlink()
+            finish_replay = True
+    proposals = (
+        proposal_list_data(
+            control_root,
+            approval_proposal_ids,
+            findings.get("created_proposal_ids", []),
+        )
+        if approval_proposal_ids
+        else []
+    )
+    if finish_replay and state_path is not None:
+        state_path.unlink()
     batch_path.unlink()
     try:
         findings_path.unlink()
@@ -382,6 +531,8 @@ def complete(args: argparse.Namespace) -> int:
             "status": "completed",
             "selection": batch.get("selection", {"mode": "incremental"}),
             "findings": str(output_path),
+            "approval_proposal_ids": approval_proposal_ids,
+            "proposals": proposals,
             "pruned": removed,
         }
     )

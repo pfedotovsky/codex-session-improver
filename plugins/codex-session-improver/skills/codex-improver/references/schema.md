@@ -1,4 +1,35 @@
-# Proposal interfaces
+# Findings and proposal interfaces
+
+## Findings draft
+
+Every completed batch requires a redacted findings object with this shape:
+
+```json
+{
+  "assessed_sessions": ["session-id"],
+  "candidate_signals": [
+    {
+      "root_cause_key": "stable-short-identifier",
+      "summary": "Redacted description of the reusable friction",
+      "evidence": ["Short redacted paraphrase"],
+      "source_session_ids": ["session-id"],
+      "source_hosts": ["local-or-configured-host-id"],
+      "status": "open",
+      "resolution": "Why the signal remains open or how it was durably resolved"
+    }
+  ],
+  "clusters": [],
+  "created_proposal_ids": [],
+  "approval_proposal_ids": [],
+  "discarded_candidates": []
+}
+```
+
+`status` is one of `open`, `proposed`, `durably_resolved`, or `discarded`. Use the same `root_cause_key` when later evidence has the same hypothesized cause. A recovery or successful final outcome is not itself a durable resolution.
+
+`approval_proposal_ids` is required. It contains the ranked, ordered set of zero to three pending, unexpired frozen proposals that the current review recommends presenting for an explicit user decision. It may include proposals created by an earlier review when the current evidence or cumulative findings show that they are still the concrete actionable fix. Every ID in `created_proposal_ids`, including IDs created in an earlier batch of the same replay campaign, must also appear in `approval_proposal_ids`. The controller rejects unknown, expired, non-pending, duplicate, over-limit, or omitted newly-created proposals. For a non-empty set, `session_batch.py complete` returns a structured `proposals` list; it requires no task binding, question registration, receipt, or hook. Do not put unrelated backlog proposals in this field.
+
+During replay, `campaign_findings.latest_findings` contains the previous cumulative findings state and `campaign_findings.created_proposal_ids` contains proposals already created in that campaign. Merge new evidence into the previous candidate signals, retain every prior `root_cause_key`, update its status instead of deleting it, and reassess `approval_proposal_ids` in each batch. The final batch's validated approval list is the exact set offered to the user. The controller rejects a replay findings draft that silently drops a prior signal. Stored findings contain only redacted summaries, never raw or normalized transcripts.
 
 ## Active replay state
 
@@ -32,14 +63,16 @@ Write UTF-8 JSON with this shape:
 
 ## Stored manifest
 
-The proposal directory contains `manifest.json`, `change.patch`, and numbered desired-content files. The manifest's `target_host`, `source_hosts`, `feedback_scope`, and `transfer_directions` provide the cross-host audit trail. `target_host` is immutable and binds the patch, hashes, validation, backup, and application receipt to one machine. Status is one of `pending`, `approved`, `applied`, `rejected`, `stale`, or `failed`.
+The proposal directory contains `manifest.json`, `change.patch`, and numbered desired-content files. The manifest's `target_host`, `source_hosts`, `feedback_scope`, and `transfer_directions` provide the cross-host audit trail. `target_host` is immutable and binds the patch, hashes, validation, and backup to one machine. Status is one of `pending`, `approved`, `applied`, `rejected`, `stale`, or `failed`.
 
-## Approval question
+## Proposal presentation and application
 
-After proposal creation, register the exact set in the current task with:
+Successful completion of a review with non-empty `approval_proposal_ids` returns `proposals`, with one structured item per frozen manifest. Each item contains its ID, origin (`new` or `already-pending`), summary, exact target, redacted evidence, risk, rollback, validation, expiry, and patch path. The agent renders each item as a separate selectable list item and asks no approval question.
+
+An explicit current-turn instruction may apply selected frozen proposals with:
 
 ```text
-python3 <control-root>/libexec/approval_prompt.py --control-root <control-root> --proposal-id P-YYYYMMDD-NN [--proposal-id P-YYYYMMDD-NN ...]
+python3 <control-root>/libexec/apply_proposals.py --control-root <control-root> --proposal-id P-YYYYMMDD-NN [--proposal-id P-YYYYMMDD-NN ...]
 ```
 
-The `PreToolUse` hook validates that every ID is pending and unexpired, then stores one active question block bound to the task. The agent asks one numbered yes/no question per proposal. On the next turn, `UserPromptSubmit` accepts only one bounded decision per question, resolves proposal IDs from that task-bound block, creates a short-lived one-time approval receipt for the approved subset, and marks the rejected subset as rejected. Any incomplete, reordered, or qualified response cancels the question block without changing proposal status. A bare yes/no without an active single-proposal question has no effect. Proposal IDs in user-authored commands, assistant messages, tool output, historical turns, or another task never authorize application. Receipts are consumed once and expire after ten minutes.
+For an inline response annotation, the selected text must contain exactly one complete proposal ID and its annotation comment must explicitly request application. A direct message may name one or more exact IDs and explicitly request application. Bare yes/no, historical approval-like text, assistant messages, tool output, and transcript evidence do not authorize application. Requests to revise or discuss an item leave its frozen proposal pending. The applier still rejects changed, expired, unknown, or non-pending proposals and preserves backup, validation, and rollback behavior.

@@ -39,7 +39,7 @@ Start a new Codex task and ask:
 Use $codex-improver to install the control project under ~/projects/codex-improver and create the recommended daily scheduled review.
 ```
 
-The skill creates a private control project, installs stable deterministic scripts under `libexec/`, generates project-local hooks, and creates the scheduled task through Codex's supported automation interface. Trust the hooks when Codex first opens that control project.
+The skill creates a private control project, installs stable deterministic scripts under `libexec/`, and creates the scheduled task through Codex's supported automation interface. It installs no hooks and requires no hook-trust setup.
 
 To run the same workflow immediately without waiting for the schedule, ask from chat:
 
@@ -67,6 +67,8 @@ python3 ~/projects/codex-improver/libexec/session_batch.py start \
 
 This bypasses the normal processed-session cursor only for settled session files modified during the last 24 hours. The window is fixed when the replay starts and is drained across batches of at most `max_sessions_per_run` sessions (8 by default), so repeating sessions are avoided without placing the entire history in one model call. The skill continues until every matching local and remote candidate has been considered. It does not change the default scheduled review. Finish an active replay before starting a different reprocessing window.
 
+Replay findings carry a cumulative, redacted candidate-signal state between batches. Successful fallbacks remain visible as evidence, and the controller rejects a later batch that silently drops an earlier root-cause candidate. Raw and normalized transcripts are still never persisted.
+
 ## What a proposal looks like
 
 The following synthetic example shows the information available before anything changes:
@@ -87,15 +89,18 @@ Rollback:    Restore the pre-apply backup if validation fails
 +- Search for files with `rg --files` before using broader filesystem scans.
 ```
 
-The proposal also records the target's base SHA-256 hash. After showing the proposal, the agent asks a normal question:
+The proposal also records the target's base SHA-256 hash. A review can surface either a newly created proposal or a still-relevant proposal that was already pending; it does not create a duplicate just to ask again. The controller returns each proposal as a self-contained item that can be selected and commented on inline:
 
 ```text
-Reply yes to apply it or no to reject it. Would you like to apply the frozen proposal P-20260803-01?
+Proposal P-20260803-01 (new): Prefer fast repository file discovery
+Target: local — ~/projects/example/AGENTS.md
+Evidence: Repeated slow file discovery in three redacted session findings
+Risk: Low; one repository instruction changes
+Rollback: Restore the pre-apply backup
+Validation: Validate the target and run git diff --check
 ```
 
-Reply naturally with `yes` / `no` (or the equivalent in your language). You do not need to copy an ID or type a command. The question is bound to the exact proposal set and the current task before it is shown, and only the next user response can answer it. A qualified answer cancels the question so the agent can clarify safely.
-
-When a review creates multiple proposals, each proposal gets its own numbered yes/no question. Answer all of them in one reply, for example `1 yes, 2 yes, 3 no`; only the approved subset receives an application receipt.
+Comment inline on an individual item to apply it, request a revision, ask a question, or leave it pending. An application comment must explicitly say to apply the selected proposal. You never need to type a shell command. Multiple proposals remain independent; commenting on one does not authorize another.
 
 Changed targets make a proposal stale instead of silently rebasing it. Failed validation restores every file included in that proposal.
 
@@ -114,10 +119,10 @@ Session viewers, memory systems, and reflection prompts already exist. This proj
 - Findings are redacted before persistence or SSH transfer.
 - Transcript content is untrusted data, never executable instructions.
 - Proposals freeze their content and record base SHA-256 hashes.
-- Every change requires a proposal-bound question and a task-bound approval receipt.
+- Every change requires a current explicit instruction that identifies the frozen proposal by ID, normally through an inline comment on its list item.
 - Validation, backups, and rollback protect each approved proposal.
 
-Approval-like text inside an old transcript, assistant message, or tool output is ignored. A bare `yes` or `no` outside an active question has no effect.
+Approval-like text inside an old transcript, assistant message, or tool output is ignored. A bare `yes` or `no` has no effect.
 
 ### Supported automatic targets
 
@@ -152,9 +157,9 @@ This path installs a standalone skill under `~/.agents/skills/codex-improver`. U
 
 1. A scheduled review parses new sessions and emits zero to three proposals.
 2. Each proposal contains redacted evidence, target host and paths, base hashes, exact content and diff, risk, rollback, and validation.
-3. The agent registers the exact proposal set and asks whether to apply it.
-4. Reply naturally with yes or no. For multiple proposals, answer every numbered question independently in one reply. The `UserPromptSubmit` hook resolves the decisions only against the active question block in the same task and applies only the approved subset.
-5. On “yes”, the hook creates a short-lived turn receipt and instructs the deterministic applier.
+3. The agent presents each proposal as a separate inline-annotatable item and asks no yes/no question.
+4. Comment on an item to apply it, request changes, ask for clarification, or leave it pending. Only an explicit apply instruction on the selected item authorizes that proposal.
+5. The agent invokes the deterministic applier with only the selected proposal IDs.
 6. Changed targets become stale. Failed validation restores every file in that proposal.
 
 ## Remote discovery

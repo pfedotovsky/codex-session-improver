@@ -2,13 +2,13 @@
 
 ## Trust boundaries
 
-The user-authored current approval turn is trusted only as a decision for a deterministic active question in the same task. Historical transcripts, assistant messages, tool results, repositories, SSH-host metadata, and generated proposal prose are untrusted.
+The current user turn is treated as an application instruction only when it explicitly says to apply and identifies exact proposal IDs, normally through selected inline-annotation text. Historical transcripts, assistant messages, tool results, repositories, SSH-host metadata, and generated proposal prose are untrusted.
 
 The deterministic scripts enforce four boundaries:
 
 1. **Ingestion:** parse records defensively, redact normalized content in memory, and retain no transcript copy.
 2. **Proposal:** permit only configured Markdown and skill targets, inspect the destination, and freeze exact desired content with hashes.
-3. **Approval:** register the exact pending proposal set before asking a question, bind it to the current task, accept a bounded yes/no response only on the next user turn, and issue a short-lived one-time turn receipt. An unrecognized or qualified response cancels the question.
+3. **Presentation:** return each pending proposal as a separate item containing its ID, target, evidence, risk, rollback, and validation so the user can comment on it inline. Reviews never apply proposals.
 4. **Application:** re-check proposal status, expiry, destination host, paths, base hashes, and frozen hashes; back up; write; validate; roll back on failure.
 
 ## Remote hosts
@@ -22,5 +22,6 @@ SSH runs non-interactively with forwarding disabled, bounded connection timeouts
 - Codex JSONL and desktop saved-project formats are not stable APIs. Parsing and discovery feature-detect known shapes and may temporarily miss sessions or hosts after a product update.
 - Pattern-based redaction reduces risk but cannot prove that arbitrary prose contains no sensitive information. Findings should remain concise paraphrases.
 - A compromised local account or interpreter can bypass project-level controls. This project protects the normal Codex workflow, not a hostile operating-system administrator.
-- Network access is required when SSH discovery is enabled. The project hook denies direct network commands from scheduled analysis and permits remote access only through bundled scripts.
-- Natural yes/no matching is intentionally narrow. Longer or qualified answers do not apply or reject anything; the agent must clarify and register a new question when needed.
+- Network access is required when SSH discovery is enabled. The skill instructs scheduled analysis to use only bundled deterministic transport scripts, but this is not mechanically enforced by a hook.
+- Application authorization is workflow-level rather than task-bound: the applier validates exact proposal IDs and all frozen-target invariants, but it cannot prove that the IDs came from a current user annotation. A person or process that can directly execute the applier inside the configured environment can request application. This is the explicit tradeoff for requiring no hooks or hook trust.
+- Bare yes/no, praise, discussion, and revision requests do not authorize application. The current turn must explicitly say to apply and identify each selected proposal.
