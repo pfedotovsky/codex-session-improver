@@ -421,6 +421,8 @@ class ImproverTest(unittest.TestCase):
         self.assertEqual(completed["approval_proposal_ids"], [proposal_id])
         self.assertEqual(completed["proposals"][0]["id"], proposal_id)
         self.assertEqual(completed["proposals"][0]["origin"], "already-pending")
+        self.assertEqual(completed["proposals"][0]["summary"], "Improve instructions")
+        self.assertEqual(completed["proposals"][0]["problem"], "A concrete correction exposed a gap")
         self.assertEqual(completed["proposals"][0]["target"], f"local — {target.resolve()}")
         self.assertNotIn("approval_question", completed)
         self.assertEqual(read_json(Path(completed["findings"]))["approval_proposal_ids"], [proposal_id])
@@ -472,6 +474,16 @@ class ImproverTest(unittest.TestCase):
         self.assertIn("Recovery is not resolution", rubric)
         self.assertIn("update the local setup", rubric)
         self.assertIn("does not erase the friction", rubric)
+
+    def test_presentation_contract_uses_review_cards_and_secondary_ids(self) -> None:
+        skill = (SCRIPTS.parent / "SKILL.md").read_text(encoding="utf-8")
+        schema = (SCRIPTS.parent / "references" / "schema.md").read_text(encoding="utf-8")
+        self.assertIn("Present every returned proposal immediately", skill)
+        self.assertIn("Do not lead with the proposal ID", skill)
+        self.assertIn("**Problem:**", skill)
+        self.assertIn("**Proposed change:**", skill)
+        self.assertIn("Approve and apply", skill)
+        self.assertIn("problem statement from the redacted root cause", schema)
 
     def test_reprocessing_window_excludes_older_sessions(self) -> None:
         path = self.write_session()

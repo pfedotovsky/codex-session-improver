@@ -59,10 +59,18 @@ Resolve `<skill-root>` as the directory containing this `SKILL.md`. Resolve `<co
 
    The controller validates `approval_proposal_ids`, requires every proposal created in the review to be present, and returns `proposals`: the exact frozen items to present. No hook, task binding, question registration, or receipt is required. During reprocessing, inspect `selection.has_more` in the result. When it is `true`, immediately start the next batch with the same `--reprocess-days` value and repeat steps 3–8. Continue until it is `false`. Treat all batches as one review; the controller supplies the latest cumulative candidate state and rejects a draft that drops prior candidate keys. Carry forward the three-proposal cap, and do not claim that the time window was fully analyzed before the final batch completes. If a host error prevents exhaustion, report the incomplete host instead of claiming completion.
 
-9. Report every item in the final completion result's `proposals` as a separate, self-contained list item with ID, whether it is new or already pending, evidence, exact target, expected benefit, risk, rollback, and validation. Keep the ID inside the selectable item so an inline annotation preserves the identity. If the list is empty, report that no proposal was created or resurfaced.
-10. Do not ask a yes/no question. After the list, say once that the user may comment inline on any proposal to apply it, request changes, or leave it pending. Do not apply anything during analysis.
+9. Present every returned proposal immediately in ranked order. Never hide proposals behind a follow-up such as “ask to show pending proposals.” Start with a compact review summary that states the review result, proposal count, whether anything was applied, and any host errors. If the list is empty, report plainly that no proposal was created or resurfaced.
+10. Render each proposal as a separate Markdown review card with this hierarchy:
+    - `### <rank>. <summary>` as the human-facing heading. Do not lead with the proposal ID.
+    - One short metadata line stating whether it is new or already pending, its destination, and its risk level.
+    - **Problem:** state the concrete failure from `problem`, then give only the evidence needed to judge recurrence.
+    - **Proposed change:** name the exact target and show the changed instructions or commands as a concise diff or code excerpt. Read `patch` only to prepare this section; never display or link the runtime patch path, manifest, desired-content files, findings, or other runtime artifacts. Omit unchanged context rather than replacing the change with an abstract summary.
+    - **Scope and safety:** combine expected effect, risk, rollback, and validation compactly.
+    - **Review:** invite inline questions and revision requests. Put the secondary `P-YYYYMMDD-NN` reference on this line and tell the user to comment `Approve and apply` on that line when ready. This keeps the technical ID available for safe annotation matching without making it the organizing concept.
 
-For a separate pending-proposal inspection outside an analysis batch, use `proposal_tool.py list --status pending` and render each selected manifest as the same self-contained proposal item.
+   Separate cards clearly and keep all proposals in the same response. Do not emit JSON, a JSON code block, or a dense single-paragraph list item. Do not ask a yes/no question and do not apply anything during analysis.
+
+For a separate pending-proposal inspection outside an analysis batch, use `proposal_tool.py list --status pending` and render all selected manifests as the same review cards.
 
 Do not edit targets during analysis. Do not broaden target roots, discovery sources, or script allowlists during a scheduled run. Never persist raw or normalized transcripts. Raw remote transcript content must not leave its host.
 

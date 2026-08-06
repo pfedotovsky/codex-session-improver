@@ -275,6 +275,7 @@ def proposal_list_data(
                 "id": proposal_id,
                 "origin": "new" if proposal_id in created else "already-pending",
                 "summary": str(manifest.get("summary", ""))[:500],
+                "problem": str(manifest.get("root_cause", ""))[:1500],
                 "target": proposal_target(manifest),
                 "evidence": redact_obj(manifest.get("evidence", []), 1500),
                 "risk": str(manifest.get("risk", ""))[:1500],

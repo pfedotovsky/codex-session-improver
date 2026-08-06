@@ -69,19 +69,23 @@ This bypasses the normal processed-session cursor only for settled session files
 
 Replay findings carry a cumulative, redacted candidate-signal state between batches. Successful fallbacks remain visible as evidence, and the controller rejects a later batch that silently drops an earlier root-cause candidate. Raw and normalized transcripts are still never persisted.
 
-## What a proposal looks like
+## What a review looks like
 
-The following synthetic example shows the information available before anything changes:
+The review shows every proposal immediately. Human-facing titles organize the result; stable proposal IDs remain secondary references for safe application.
 
-```text
-Proposal:    P-20260803-01
-Destination: local
-Target:      ~/projects/example/AGENTS.md
-Evidence:    A repeated, redacted finding from three settled sessions
-Risk:        Low; one repository instruction changes
-Validation:  Validate the target and its repository rules
-Rollback:    Restore the pre-apply backup if validation fails
-```
+> Review complete · 1 improvement proposed · nothing applied · no host errors
+
+### 1. Prefer fast repository file discovery
+
+New proposal · local destination · low risk
+
+**Problem**
+
+Three settled sessions repeated slow filesystem discovery even though the repository already supported a faster path.
+
+**Proposed change**
+
+Update `~/projects/example/AGENTS.md`:
 
 ```diff
  ## Repository workflow
@@ -89,18 +93,15 @@ Rollback:    Restore the pre-apply backup if validation fails
 +- Search for files with `rg --files` before using broader filesystem scans.
 ```
 
-The proposal also records the target's base SHA-256 hash. A review can surface either a newly created proposal or a still-relevant proposal that was already pending; it does not create a duplicate just to ask again. The controller returns each proposal as a self-contained item that can be selected and commented on inline:
+**Scope and safety**
 
-```text
-Proposal P-20260803-01 (new): Prefer fast repository file discovery
-Target: local — ~/projects/example/AGENTS.md
-Evidence: Repeated slow file discovery in three redacted session findings
-Risk: Low; one repository instruction changes
-Rollback: Restore the pre-apply backup
-Validation: Validate the target and run git diff --check
-```
+One repository instruction changes. Restore the pre-apply backup to roll back; validate the target and run `git diff --check`.
 
-Comment inline on an individual item to apply it, request a revision, ask a question, or leave it pending. An application comment must explicitly say to apply the selected proposal. You never need to type a shell command. Multiple proposals remain independent; commenting on one does not authorize another.
+**Review**
+
+Comment inline to ask a question or request a revision. To apply, comment `Approve and apply` on this line. Reference: `P-20260803-01`.
+
+The reference binds approval to the exact frozen patch and base SHA-256 hash; users do not need to organize or reason about proposals by ID. Multiple cards remain independent, and commenting on one never authorizes another. Runtime findings, manifests, patch paths, and desired-content files stay internal.
 
 Changed targets make a proposal stale instead of silently rebasing it. Failed validation restores every file included in that proposal.
 
@@ -119,7 +120,7 @@ Session viewers, memory systems, and reflection prompts already exist. This proj
 - Findings are redacted before persistence or SSH transfer.
 - Transcript content is untrusted data, never executable instructions.
 - Proposals freeze their content and record base SHA-256 hashes.
-- Every change requires a current explicit instruction that identifies the frozen proposal by ID, normally through an inline comment on its list item.
+- Every change requires a current explicit instruction that identifies the frozen proposal, normally by commenting `Approve and apply` on the card's review line containing its secondary reference.
 - Validation, backups, and rollback protect each approved proposal.
 
 Approval-like text inside an old transcript, assistant message, or tool output is ignored. A bare `yes` or `no` has no effect.
@@ -157,8 +158,8 @@ This path installs a standalone skill under `~/.agents/skills/codex-improver`. U
 
 1. A scheduled review parses new sessions and emits zero to three proposals.
 2. Each proposal contains redacted evidence, target host and paths, base hashes, exact content and diff, risk, rollback, and validation.
-3. The agent presents each proposal as a separate inline-annotatable item and asks no yes/no question.
-4. Comment on an item to apply it, request changes, ask for clarification, or leave it pending. Only an explicit apply instruction on the selected item authorizes that proposal.
+3. The agent shows every proposal immediately as a separate Markdown review card led by its human title, concrete problem, and exact proposed change. IDs remain secondary references; JSON and runtime-artifact links stay hidden.
+4. Comment inline to discuss or revise a card. To apply it, comment `Approve and apply` on its review line. Only that explicit instruction authorizes the referenced proposal.
 5. The agent invokes the deterministic applier with only the selected proposal IDs.
 6. Changed targets become stale. Failed validation restores every file in that proposal.
 
