@@ -72,8 +72,8 @@ def parse_global_config(path: Path) -> dict[str, Any]:
     """Project only non-secret structure from global config TOML.
 
     This intentionally avoids a general TOML dependency so the installed runtime
-    remains compatible with Python 3.9. Values other than booleans in selected
-    safe sections are never retained.
+    stays standard-library-only. Values other than booleans in selected safe
+    sections are never retained.
     """
 
     result: dict[str, Any] = {

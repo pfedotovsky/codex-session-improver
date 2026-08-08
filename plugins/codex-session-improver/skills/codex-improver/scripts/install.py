@@ -157,8 +157,8 @@ def main() -> int:
     parser.add_argument("--install-standalone-skill", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
-    if sys.version_info < (3, 9):
-        raise RuntimeError("Python 3.9 or newer is required")
+    if sys.version_info < (3, 12):
+        raise RuntimeError("Python 3.12 or newer is required")
 
     skill_root = Path(__file__).resolve().parent.parent
     templates = skill_root / "assets" / "control-project"
