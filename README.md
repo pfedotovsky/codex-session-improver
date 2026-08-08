@@ -1,7 +1,7 @@
 # Codex Session Improver
 
 [![CI](https://github.com/pfedotovsky/codex-session-improver/actions/workflows/ci.yml/badge.svg)](https://github.com/pfedotovsky/codex-session-improver/actions/workflows/ci.yml)
-[![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/downloads/)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 
 > Experimental community project; not an official OpenAI product.
@@ -48,6 +48,22 @@ Use $codex-improver to run the next session review now. Analyze only; do not app
 ```
 
 Both entry points call the same skill, so the safety and analysis workflow stays in one place. `scheduled-task.spec.toml` remains a portable, project-owned description rather than Codex's private automation format, and `automation-prompt.md` provides the generated one-line task prompt. The Codex app remains the runtime source of truth; only its supported automation interface edits private task state.
+
+### Audit persistent global context
+
+The installer also generates an optional companion task specification for a read-only audit of persistent global Codex context under the user's Codex and agents homes. It inventories global `AGENTS.md`, non-secret configuration structure, approval rules, personal skill metadata, configured plugins, app connectors, and effective MCP registrations. It never reads session transcripts or treats the complete config, plugin cache, or desktop state file as injected prompt text.
+
+Ask Codex to create the separate daily audit:
+
+```text
+Use $codex-improver to create the daily persistent global-context audit from the generated companion task specification.
+```
+
+The default companion schedule is daily at 13:15 local time. Each run reports a measured summary and at most three reversible suggestions. It does not edit configuration, remove plugins or MCPs, create proposals, or apply changes. Run the same audit immediately with:
+
+```bash
+python3 ~/projects/codex-improver/libexec/global_context_audit.py
+```
 
 ### Reanalyze recent sessions
 
@@ -138,11 +154,11 @@ Source code, credentials, Codex configuration, session data, plugins, system ski
 ## Requirements
 
 - macOS with the Codex desktop app for local scheduled tasks.
-- Python 3.9 or newer; runtime scripts use only the standard library.
+- Python 3.12 or newer; runtime scripts use only the standard library.
 - `git` and `rg` for normal Codex project workflows.
 - Optional: concrete OpenSSH aliases with key-based non-interactive access for remote hosts.
 
-Remote workers require a POSIX host with Python 3.9 or newer and local Codex sessions under its configured Codex home.
+Remote workers require a POSIX host with Python 3.12 or newer and local Codex sessions under its configured Codex home.
 
 ## Install from a clone
 

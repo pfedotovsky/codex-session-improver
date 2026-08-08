@@ -165,6 +165,83 @@ class ImproverTest(unittest.TestCase):
         self.assertNotIn("me@example.com", serialized)
         self.assertTrue(parsed["errors"])
 
+    def test_global_context_audit_projects_only_non_secret_structure(self) -> None:
+        codex_home = self.root / "home" / ".codex"
+        agents_home = self.root / "home" / ".agents"
+        codex_home.mkdir(parents=True)
+        agents_home.mkdir(parents=True)
+        missing_project = self.root / "missing-project"
+        (codex_home / "AGENTS.md").write_text("# Global guidance\n\nBe concise.\n", encoding="utf-8")
+        (codex_home / "config.toml").write_text(
+            "\n".join(
+                (
+                    f'[projects."{missing_project}"]',
+                    'trust_level = "trusted"',
+                    '[plugins."example@market"]',
+                    "enabled = true",
+                    "[mcp_servers.retired]",
+                    "enabled = false",
+                    'command = "contains-private-command"',
+                    "[mcp_servers.retired.env]",
+                    f'SECRET_TOKEN = "{TEST_SECRET}"',
+                    "[features]",
+                    "chronicle = true",
+                    '[hooks.state."/Users/example/project/.codex/hooks.json:stop:0:0"]',
+                    "decision = true",
+                )
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        rules = codex_home / "rules" / "default.rules"
+        rules.parent.mkdir(parents=True)
+        rules.write_text('prefix_rule(pattern=["safe"], decision="allow")\n', encoding="utf-8")
+        user_skill = codex_home / "skills" / "example" / "SKILL.md"
+        user_skill.parent.mkdir(parents=True)
+        user_skill.write_text(
+            "---\nname: example\ndescription: A synthetic audit skill.\n---\n\n# Example\n",
+            encoding="utf-8",
+        )
+        plugin_root = codex_home / "plugins" / "cache" / "market" / "example" / "1.0.0"
+        manifest = plugin_root / ".codex-plugin" / "plugin.json"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(
+            json.dumps({"name": "example", "version": "1.0.0", "skills": "./skills/", "apps": "./.app.json"}),
+            encoding="utf-8",
+        )
+        plugin_skill = plugin_root / "skills" / "plugin-example" / "SKILL.md"
+        plugin_skill.parent.mkdir(parents=True)
+        plugin_skill.write_text(
+            "---\nname: plugin-example\ndescription: A synthetic plugin skill.\n---\n\n# Plugin example\n",
+            encoding="utf-8",
+        )
+        (plugin_root / ".app.json").write_text("{}\n", encoding="utf-8")
+        (codex_home / ".codex-global-state.json").write_text(
+            json.dumps({"private": TEST_SECRET}), encoding="utf-8"
+        )
+
+        result = self.run_script(
+            "global_context_audit.py",
+            "--codex-home",
+            str(codex_home),
+            "--agents-home",
+            str(agents_home),
+        )
+        payload = json.loads(result.stdout)
+        self.assertNotIn(TEST_SECRET, result.stdout)
+        self.assertNotIn("contains-private-command", result.stdout)
+        self.assertEqual(payload["scope"]["codex_home"], "$CODEX_HOME")
+        self.assertEqual(payload["config"]["project_entries"], 1)
+        self.assertEqual(payload["config"]["missing_project_entries"], 1)
+        self.assertEqual(payload["config"]["hook_state_entries"], 1)
+        self.assertEqual(payload["mcp"]["configured_count"], 1)
+        self.assertEqual(payload["mcp"]["configured_disabled"], ["retired"])
+        self.assertEqual(payload["skills"]["installed_user_skill_count"], 1)
+        self.assertEqual(payload["plugins"]["configured_enabled_count"], 1)
+        self.assertEqual(payload["plugins"]["enabled_skill_count"], 1)
+        self.assertEqual(payload["plugins"]["enabled_app_connector_count"], 1)
+        self.assertEqual(payload["rules"]["rule_entries"], 1)
+
     def test_batch_is_incremental_and_retains_no_content(self) -> None:
         path = self.write_session()
         first = self.run_script("session_batch.py", "start", "--control-root", str(self.control))

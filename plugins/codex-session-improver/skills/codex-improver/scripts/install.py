@@ -16,6 +16,7 @@ from typing import Any
 ENGINE_FILES = (
     "apply_proposals.py",
     "diagnose.py",
+    "global_context_audit.py",
     "host_discovery.py",
     "improver_lib.py",
     "proposal_tool.py",
@@ -81,6 +82,8 @@ def backup_managed_files(control_root: Path) -> Path | None:
         control_root / ".gitignore",
         control_root / "automation-prompt.md",
         control_root / "scheduled-task.spec.toml",
+        control_root / "global-context-automation-prompt.md",
+        control_root / "global-context-scheduled-task.spec.toml",
         control_root / ".codex" / "hooks.json",
         control_root / ".codex" / "config.toml",
         *(control_root / "libexec" / name for name in OBSOLETE_ENGINE_FILES),
@@ -154,8 +157,8 @@ def main() -> int:
     parser.add_argument("--install-standalone-skill", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
-    if sys.version_info < (3, 9):
-        raise RuntimeError("Python 3.9 or newer is required")
+    if sys.version_info < (3, 12):
+        raise RuntimeError("Python 3.12 or newer is required")
 
     skill_root = Path(__file__).resolve().parent.parent
     templates = skill_root / "assets" / "control-project"
@@ -257,6 +260,16 @@ def main() -> int:
         .read_text(encoding="utf-8")
         .replace("<control-root>", str(control_root)),
     )
+    atomic_text(
+        control_root / "global-context-automation-prompt.md",
+        (templates / "global-context-automation-prompt.md").read_text(encoding="utf-8"),
+    )
+    atomic_text(
+        control_root / "global-context-scheduled-task.spec.toml",
+        (templates / "global-context-scheduled-task.spec.toml")
+        .read_text(encoding="utf-8")
+        .replace("<control-root>", str(control_root)),
+    )
     try:
         (control_root / ".codex" / "hooks.json").unlink()
     except FileNotFoundError:
@@ -280,6 +293,8 @@ def main() -> int:
         "hooks_installed": False,
         "automation_prompt": str(control_root / "automation-prompt.md"),
         "automation_spec": str(control_root / "scheduled-task.spec.toml"),
+        "global_context_automation_prompt": str(control_root / "global-context-automation-prompt.md"),
+        "global_context_automation_spec": str(control_root / "global-context-scheduled-task.spec.toml"),
         "managed_backup": str(backup) if backup else None,
         "standalone_skill_path": str(skill_target) if skill_target else None,
         "standalone_skill_backup": str(skill_backup) if skill_backup else None,

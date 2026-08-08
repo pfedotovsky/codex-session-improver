@@ -1,0 +1,13 @@
+# Portable source specification for the optional global-context audit.
+# Codex's app-managed automation remains the runtime source of truth.
+# Do not copy this file into $CODEX_HOME/automations.
+
+spec_version = 1
+name = "Codex global context audit"
+kind = "standalone"
+project = "<control-root>"
+execution_environment = "local"
+schedule = "daily at 13:15 local time"
+reasoning_effort = "high"
+model = "high-reasoning model"
+prompt_file = "global-context-automation-prompt.md"
