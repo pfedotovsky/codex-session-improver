@@ -16,6 +16,8 @@
 
 The installer does not write Codex's private automation state directly. It generates the prompt and project configuration, while the app creates the scheduled task through its supported automation interface.
 
+When the user also requests a recurring audit of persistent global Codex context, create a separate standalone task rather than expanding the session-review task. Use `<control-root>/global-context-automation-prompt.md` and `<control-root>/global-context-scheduled-task.spec.toml`; the generated default is daily at 13:15 local time. The audit is read-only, excludes session history, and never applies its suggestions.
+
 ## Upgrade
 
 Run the same installer with `--upgrade`. Preserve `config.json`, `runtime/`, proposals, findings, and backups. Refresh only managed scripts and control-project policy files. The upgrade backs up and removes obsolete hook files from earlier versions. Review any reported configuration migration before enabling new roots or host capabilities.

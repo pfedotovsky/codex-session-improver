@@ -1,6 +1,6 @@
 {
   "name": "codex-session-improver",
-  "version": "0.1.0+codex.20260805103923",
+  "version": "0.1.0+codex.20260808134130",
   "description": "Turn local and remote Codex session evidence into redacted, reviewable instruction and skill patches applied only when explicitly selected.",
   "author": {
     "name": "Pavel Fedotovsky",

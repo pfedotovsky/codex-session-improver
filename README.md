@@ -49,6 +49,22 @@ Use $codex-improver to run the next session review now. Analyze only; do not app
 
 Both entry points call the same skill, so the safety and analysis workflow stays in one place. `scheduled-task.spec.toml` remains a portable, project-owned description rather than Codex's private automation format, and `automation-prompt.md` provides the generated one-line task prompt. The Codex app remains the runtime source of truth; only its supported automation interface edits private task state.
 
+### Audit persistent global context
+
+The installer also generates an optional companion task specification for a read-only audit of persistent global Codex context under the user's Codex and agents homes. It inventories global `AGENTS.md`, non-secret configuration structure, approval rules, personal skill metadata, configured plugins, app connectors, and effective MCP registrations. It never reads session transcripts or treats the complete config, plugin cache, or desktop state file as injected prompt text.
+
+Ask Codex to create the separate daily audit:
+
+```text
+Use $codex-improver to create the daily persistent global-context audit from the generated companion task specification.
+```
+
+The default companion schedule is daily at 13:15 local time. Each run reports a measured summary and at most three reversible suggestions. It does not edit configuration, remove plugins or MCPs, create proposals, or apply changes. Run the same audit immediately with:
+
+```bash
+python3 ~/projects/codex-improver/libexec/global_context_audit.py
+```
+
 ### Reanalyze recent sessions
 
 To apply updated analysis logic to sessions that were already assessed, ask:

@@ -61,6 +61,9 @@ class InstallerTest(unittest.TestCase):
         self.assertFalse((self.control / ".codex" / "hooks.json").exists())
         self.assertTrue((self.control / "automation-prompt.md").is_file())
         self.assertTrue((self.control / "scheduled-task.spec.toml").is_file())
+        self.assertTrue((self.control / "global-context-automation-prompt.md").is_file())
+        self.assertTrue((self.control / "global-context-scheduled-task.spec.toml").is_file())
+        self.assertTrue((self.control / "libexec" / "global_context_audit.py").is_file())
         automation_prompt = (self.control / "automation-prompt.md").read_text(encoding="utf-8")
         self.assertEqual(
             automation_prompt,
@@ -68,6 +71,19 @@ class InstallerTest(unittest.TestCase):
             "Analyze only; do not apply proposals.\n",
         )
         self.assertEqual(payload["automation_spec"], str(self.control.resolve() / "scheduled-task.spec.toml"))
+        global_prompt = (self.control / "global-context-automation-prompt.md").read_text(encoding="utf-8")
+        self.assertIn("persistent global Codex context", global_prompt)
+        self.assertEqual(
+            payload["global_context_automation_prompt"],
+            str(self.control.resolve() / "global-context-automation-prompt.md"),
+        )
+        global_spec = (self.control / "global-context-scheduled-task.spec.toml").read_text(encoding="utf-8")
+        self.assertIn(f'project = "{self.control.resolve()}"', global_spec)
+        self.assertIn('schedule = "daily at 13:15 local time"', global_spec)
+        self.assertEqual(
+            payload["global_context_automation_spec"],
+            str(self.control.resolve() / "global-context-scheduled-task.spec.toml"),
+        )
         task_spec = (self.control / "scheduled-task.spec.toml").read_text(encoding="utf-8")
         self.assertIn(f'project = "{self.control.resolve()}"', task_spec)
         config = json.loads((self.control / "config.json").read_text(encoding="utf-8"))
