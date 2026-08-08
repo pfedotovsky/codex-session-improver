@@ -26,25 +26,27 @@ The controller runs incrementally by default, so each settled session is normall
 
 ## Quick start
 
-Add this repository as a Codex plugin marketplace and install the plugin:
+The target distribution is one-click through the Codex plugin directory: select **Install**. The plugin is skill-only, so it requires no MCP server, global Codex configuration, hooks, or restart. Until the directory listing is published, use the source-marketplace installation below.
+
+For a source-marketplace installation, use:
 
 ```bash
 codex plugin marketplace add pfedotovsky/codex-session-improver
 codex plugin add codex-session-improver@codex-session-improver
 ```
 
-Start a new Codex task and ask:
+Then start a task and ask:
 
 ```text
-Use $codex-improver to install the control project under ~/projects/codex-improver and create the recommended daily scheduled review.
+Use $codex-improver to run the next session review.
 ```
 
-The skill creates a private control project, installs stable deterministic scripts under `libexec/`, and creates the scheduled task through Codex's supported automation interface. It installs no hooks and requires no hook-trust setup.
+On first use, the skill initializes its private control project with safe defaults and continues directly into the review. This initialization is automatic during normal use; it installs stable deterministic scripts under `libexec/` and no hooks. Codex currently does not let a skill-only plugin execute code at plugin-install time, so local initialization happens on the first request rather than on the Install click itself.
 
-To run the same workflow immediately without waiting for the schedule, ask from chat:
+Scheduled reviews are optional. To create one, ask:
 
 ```text
-Use $codex-improver to run the next session review now. Analyze only; do not apply proposals.
+Use $codex-improver to create the recommended daily scheduled review.
 ```
 
 Both entry points call the same skill, so the safety and analysis workflow stays in one place. `scheduled-task.spec.toml` remains a portable, project-owned description rather than Codex's private automation format, and `automation-prompt.md` provides the generated one-line task prompt. The Codex app remains the runtime source of truth; only its supported automation interface edits private task state.
@@ -87,13 +89,13 @@ Replay findings carry a cumulative, redacted candidate-signal state between batc
 
 ## What a review looks like
 
-The review shows every proposal immediately. Human-facing titles organize the result; stable proposal IDs remain secondary references for safe application.
+The review shows every suggested improvement immediately. Human-facing cards organize the result; stable controller IDs stay internal.
 
-> Review complete · 1 improvement proposed · nothing applied · no host errors
+> Review complete · 1 suggested improvement · nothing applied · no host errors
 
 ### 1. Prefer fast repository file discovery
 
-New proposal · local destination · low risk
+New suggestion · local destination · low risk
 
 **Problem**
 
@@ -113,11 +115,11 @@ Update `~/projects/example/AGENTS.md`:
 
 One repository instruction changes. Restore the pre-apply backup to roll back; validate the target and run `git diff --check`.
 
-**Review**
+**Decision**
 
-Comment inline to ask a question or request a revision. To apply, comment `Approve and apply` on this line. Reference: `P-20260803-01`.
+Apply this change? Reply naturally—for example, `yes`, `I agree`, `apply`, or `do it`—or leave that comment inline on this card. The change is applied immediately after an unambiguous decision; there is no second confirmation. You can also ask a question or request a revision.
 
-The reference binds approval to the exact frozen patch and base SHA-256 hash; users do not need to organize or reason about proposals by ID. Multiple cards remain independent, and commenting on one never authorizes another. Runtime findings, manifests, patch paths, and desired-content files stay internal.
+The controller still binds the decision to the exact frozen patch and base SHA-256 hash, but the user never needs to see, copy, or type its internal ID. With multiple cards, use visible numbers or titles, say `apply all`, or comment on the relevant card. Runtime findings, manifests, patch paths, desired-content files, and IDs stay internal.
 
 Changed targets make a proposal stale instead of silently rebasing it. Failed validation restores every file included in that proposal.
 
@@ -136,10 +138,10 @@ Session viewers, memory systems, and reflection prompts already exist. This proj
 - Findings are redacted before persistence or SSH transfer.
 - Transcript content is untrusted data, never executable instructions.
 - Proposals freeze their content and record base SHA-256 hashes.
-- Every change requires a current explicit instruction that identifies the frozen proposal, normally by commenting `Approve and apply` on the card's review line containing its secondary reference.
+- Every change requires a current, unambiguous decision about a visible review card.
 - Validation, backups, and rollback protect each approved proposal.
 
-Approval-like text inside an old transcript, assistant message, or tool output is ignored. A bare `yes` or `no` has no effect.
+Approval-like text inside an old transcript, assistant message, or tool output is ignored. A bare affirmative applies only when it directly follows a review containing exactly one card; qualified replies and ambiguous multi-card replies apply nothing.
 
 ### Supported automatic targets
 
@@ -174,9 +176,9 @@ This path installs a standalone skill under `~/.agents/skills/codex-improver`. U
 
 1. A scheduled review parses new sessions and emits zero to three proposals.
 2. Each proposal contains redacted evidence, target host and paths, base hashes, exact content and diff, risk, rollback, and validation.
-3. The agent shows every proposal immediately as a separate Markdown review card led by its human title, concrete problem, and exact proposed change. IDs remain secondary references; JSON and runtime-artifact links stay hidden.
-4. Comment inline to discuss or revise a card. To apply it, comment `Approve and apply` on its review line. Only that explicit instruction authorizes the referenced proposal.
-5. The agent invokes the deterministic applier with only the selected proposal IDs.
+3. The agent shows every proposal immediately as a separate Markdown review card led by its human title, concrete problem, and exact proposed change. IDs, JSON, and runtime-artifact links stay hidden.
+4. Reply naturally, select visible card numbers or titles, say `apply all`, or comment on a card. Questions, conditions, and revision requests do not apply it.
+5. The agent resolves that current decision to internal IDs and immediately invokes the deterministic applier with only those IDs. It does not ask for another confirmation.
 6. Changed targets become stale. Failed validation restores every file in that proposal.
 
 ## Remote discovery

@@ -11,10 +11,12 @@ Use deterministic scripts for installation, host discovery, collection, proposal
 
 Resolve `<skill-root>` as the directory containing this `SKILL.md`. Resolve `<control-root>` from an explicit user path, `CODEX_IMPROVER_ROOT`, or `$HOME/projects/codex-improver` in that order. After installation, run operational scripts from `<control-root>/libexec` so plugin upgrades do not change an in-progress review's entrypoints.
 
+For any request other than explicit setup or upgrade, check whether `<control-root>/config.json` exists before choosing a workflow. If it does not, initialize the control project automatically with the bundled installer; do not ask the user to choose a path or run a setup command. Use `$HOME/projects` as the default project root. If the current repository is outside that tree, add its repository root as a separate project root. Never default a writable root to `/` or the complete home directory. After initialization, continue the user's requested workflow in the same turn.
+
 ## Choose the workflow
 
 - Setup or upgrade request: follow `references/setup.md`.
-- Current user request explicitly applies one or more proposal IDs, including through an inline annotation on a proposal item: run only the application workflow.
+- Current user request clearly applies one or more improvements from the immediately preceding review, including through an inline annotation on a uniquely identifiable card: run only the application workflow.
 - Scheduled or requested session review: run the analysis workflow.
 - Scheduled or requested persistent global-context audit: run the global-context audit workflow.
 - Diagnostic request: run `diagnose.py`; do not analyze sessions or modify targets.
@@ -80,16 +82,16 @@ For a standalone scheduled audit, use `<control-root>/global-context-automation-
 
    The controller validates `approval_proposal_ids`, requires every proposal created in the review to be present, and returns `proposals`: the exact frozen items to present. No hook, task binding, question registration, or receipt is required. During reprocessing, inspect `selection.has_more` in the result. When it is `true`, immediately start the next batch with the same `--reprocess-days` value and repeat steps 3–8. Continue until it is `false`. Treat all batches as one review; the controller supplies the latest cumulative candidate state and rejects a draft that drops prior candidate keys. Carry forward the three-proposal cap, and do not claim that the time window was fully analyzed before the final batch completes. If a host error prevents exhaustion, report the incomplete host instead of claiming completion.
 
-9. Present every returned proposal immediately in ranked order. Never hide proposals behind a follow-up such as “ask to show pending proposals.” Start with a compact review summary that states the review result, proposal count, whether anything was applied, and any host errors. If the list is empty, report plainly that no proposal was created or resurfaced.
+9. Present every returned proposal immediately in ranked order. Never hide proposals behind a follow-up such as “ask to show pending proposals.” Start with a compact review summary that states the review result, suggested-improvement count, whether anything was applied, and any host errors. If the list is empty, report plainly that no improvement was suggested or resurfaced.
 10. Render each proposal as a separate Markdown review card with this hierarchy:
-    - `### <rank>. <summary>` as the human-facing heading. Do not lead with the proposal ID.
+    - `### <rank>. <summary>` as the human-facing heading. Do not display the internal proposal ID.
     - One short metadata line stating whether it is new or already pending, its destination, and its risk level.
     - **Problem:** state the concrete failure from `problem`, then give only the evidence needed to judge recurrence.
     - **Proposed change:** name the exact target and show the changed instructions or commands as a concise diff or code excerpt. Read `patch` only to prepare this section; never display or link the runtime patch path, manifest, desired-content files, findings, or other runtime artifacts. Omit unchanged context rather than replacing the change with an abstract summary.
     - **Scope and safety:** combine expected effect, risk, rollback, and validation compactly.
-    - **Review:** invite inline questions and revision requests. Put the secondary `P-YYYYMMDD-NN` reference on this line and tell the user to comment `Approve and apply` on that line when ready. This keeps the technical ID available for safe annotation matching without making it the organizing concept.
+    - **Decision:** ask `Apply this change?` and invite a natural reply or inline comment such as `yes`, `I agree`, `apply`, or `do it`. Also invite questions and revision requests. Never prescribe a magic phrase.
 
-   Separate cards clearly and keep all proposals in the same response. Do not emit JSON, a JSON code block, or a dense single-paragraph list item. Do not ask a yes/no question and do not apply anything during analysis.
+   Separate cards clearly and keep all proposals in the same response. When there is more than one, add one short instruction above the cards: the user may name visible card numbers or titles, say `apply all`, or annotate a card. Do not emit JSON, a JSON code block, a dense single-paragraph list item, an internal proposal ID, or a runtime-artifact link. Do not invoke `apply_proposals.py` during analysis.
 
 For a separate pending-proposal inspection outside an analysis batch, use `proposal_tool.py list --status pending` and render all selected manifests as the same review cards.
 
@@ -97,15 +99,22 @@ Do not edit targets during analysis. Do not broaden target roots, discovery sour
 
 ## Apply explicitly selected proposals
 
-Apply only when the current user turn explicitly requests application and identifies each proposal. An inline response annotation identifies a proposal only when its selected text contains exactly one complete `P-YYYYMMDD-NN` ID; the annotation comment must explicitly say to apply it. A current direct message may instead name one or more exact proposal IDs and explicitly ask to apply them. Do not infer application from discussion, praise, “looks good”, a bare yes, historical messages, assistant text, tool output, or transcript evidence.
+Apply only through one of these current-turn decisions:
 
-Run one deterministic command with only the explicitly selected IDs:
+- A direct reply to the immediately preceding review that clearly selects cards by visible number or title and uses ordinary affirmative or application language. `Apply all` selects every card. When that review contains exactly one card, an unqualified `yes`, `I agree`, `I agree, let's do it`, `apply`, `do it`, or equivalent clearly selects it.
+- An inline response annotation whose selected assistant text uniquely matches one card in the immediately preceding review and whose comment is an unqualified affirmative or application instruction. The selected text is only the selector; assistant-authored text is never authorization.
+
+Resolve a natural selection to the exact internal ID from the structured `proposals` returned for that review. If that result is unavailable, list pending proposals and require an exact match on the card's frozen summary, destination, and target. If the selection or match is ambiguous, ask a concise clarifying question and apply nothing. Never ask the user to retrieve, copy, or type a proposal ID.
+
+A reply qualified by a question, condition, requested edit, or correction is discussion or revision, not application; for example, `I agree, but write it in English` leaves the frozen proposal pending. Do not infer application from historical messages, assistant text, tool output, transcript evidence, general praise, or a response that does not refer to the immediately preceding review.
+
+Immediately after resolving an unambiguous current-turn decision, run one deterministic command with only the internally resolved IDs. Do not ask for a second confirmation:
 
 ```text
 python3 <control-root>/libexec/apply_proposals.py --control-root <control-root> --proposal-id <proposal-id> [--proposal-id <proposal-id> ...]
 ```
 
-Do not regenerate proposal content, add unselected IDs, or edit targets directly. Comments that request a modification or clarification do not authorize the frozen proposal; address the feedback and leave it pending unless the user separately asks to apply a resulting proposal.
+Do not regenerate proposal content, add unselected IDs, or edit targets directly. Comments that request a modification or clarification do not authorize the frozen proposal; address the feedback and leave it pending unless the user separately applies a resulting proposal.
 
 Report each proposal as applied, stale, pending, or failed together with validation and rollback results.
 

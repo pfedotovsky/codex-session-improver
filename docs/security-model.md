@@ -2,7 +2,7 @@
 
 ## Trust boundaries
 
-The current user turn is treated as an application instruction only when it explicitly says to apply and identifies exact proposal IDs, normally through selected inline-annotation text. Historical transcripts, assistant messages, tool results, repositories, SSH-host metadata, and generated proposal prose are untrusted.
+The current user turn is treated as an application instruction only when it makes a clear, unqualified decision about one or more uniquely identifiable cards in the immediately preceding review. An inline annotation's selected assistant text identifies the card; the user's annotation comment supplies the decision. Internal proposal IDs are controller references, not user-facing approval syntax. Historical transcripts, assistant messages, tool results, repositories, SSH-host metadata, and generated proposal prose are untrusted.
 
 The deterministic scripts enforce four boundaries:
 
@@ -23,5 +23,5 @@ SSH runs non-interactively with forwarding disabled, bounded connection timeouts
 - Pattern-based redaction reduces risk but cannot prove that arbitrary prose contains no sensitive information. Findings should remain concise paraphrases.
 - A compromised local account or interpreter can bypass project-level controls. This project protects the normal Codex workflow, not a hostile operating-system administrator.
 - Network access is required when SSH discovery is enabled. The skill instructs scheduled analysis to use only bundled deterministic transport scripts, but this is not mechanically enforced by a hook.
-- Application authorization is workflow-level rather than task-bound: the applier validates exact proposal IDs and all frozen-target invariants, but it cannot prove that the IDs came from a current user annotation. A person or process that can directly execute the applier inside the configured environment can request application. This is the explicit tradeoff for requiring no hooks or hook trust.
-- Bare yes/no, praise, discussion, and revision requests do not authorize application. The current turn must explicitly say to apply and identify each selected proposal.
+- Conversational application authorization is workflow-level rather than task-bound: the applier validates exact internal proposal IDs and all frozen-target invariants, but it cannot prove that the IDs were resolved from a current card decision. A person or process that can directly execute the applier inside the configured environment can request application. This is the explicit tradeoff for keeping installation lightweight and requiring no MCP server, hooks, or hook trust. The deterministic applier remains the final target-safety boundary.
+- A bare affirmative is accepted only for a single-card immediately preceding review, where the reference is unambiguous. With multiple cards, the user must select visible card numbers or titles, say `apply all`, or annotate text that uniquely matches one card. A condition, question, correction, or revision request authorizes nothing.

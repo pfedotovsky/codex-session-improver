@@ -25,7 +25,7 @@ ENGINE_FILES = (
     "session_batch.py",
     "validate_skill.py",
 )
-OBSOLETE_ENGINE_FILES = ("approval_prompt.py", "hook_dispatch.py")
+OBSOLETE_ENGINE_FILES = ("approval_prompt.py", "hook_dispatch.py", "improver_mcp.py")
 RUNTIME_DIRS = ("batches", "findings", "proposals", "backups", "runs", "drafts")
 
 

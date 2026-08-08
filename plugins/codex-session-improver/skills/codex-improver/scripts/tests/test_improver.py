@@ -552,15 +552,31 @@ class ImproverTest(unittest.TestCase):
         self.assertIn("update the local setup", rubric)
         self.assertIn("does not erase the friction", rubric)
 
-    def test_presentation_contract_uses_review_cards_and_secondary_ids(self) -> None:
+    def test_presentation_contract_uses_natural_decisions_and_internal_ids(self) -> None:
         skill = (SCRIPTS.parent / "SKILL.md").read_text(encoding="utf-8")
         schema = (SCRIPTS.parent / "references" / "schema.md").read_text(encoding="utf-8")
         self.assertIn("Present every returned proposal immediately", skill)
-        self.assertIn("Do not lead with the proposal ID", skill)
+        self.assertIn("Do not display the internal proposal ID", skill)
         self.assertIn("**Problem:**", skill)
         self.assertIn("**Proposed change:**", skill)
-        self.assertIn("Approve and apply", skill)
+        self.assertIn("**Decision:**", skill)
+        self.assertIn("`I agree`", skill)
+        self.assertIn("Never prescribe a magic phrase", skill)
+        self.assertIn("Never ask the user to retrieve, copy, or type a proposal ID", skill)
+        self.assertIn("I agree, but write it in English", skill)
+        self.assertIn("Do not ask for a second confirmation", skill)
+        self.assertNotIn("Approve and apply", skill)
+        self.assertNotIn("apply_improvement", skill)
         self.assertIn("problem statement from the redacted root cause", schema)
+
+    def test_first_use_initializes_without_extra_configuration(self) -> None:
+        skill = (SCRIPTS.parent / "SKILL.md").read_text(encoding="utf-8")
+        setup = (SCRIPTS.parent / "references" / "setup.md").read_text(encoding="utf-8")
+        self.assertIn("initialize the control project automatically", skill)
+        self.assertIn("do not ask the user to choose a path", skill)
+        self.assertIn("continue the user's requested workflow in the same turn", skill)
+        self.assertIn("without MCP configuration, hooks, a restart, or a scheduled task", setup)
+        self.assertIn("happens on first use rather than at plugin-install time", setup)
 
     def test_reprocessing_window_excludes_older_sessions(self) -> None:
         path = self.write_session()

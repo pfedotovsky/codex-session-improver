@@ -20,14 +20,14 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Codex Session Improver",
-    "shortDescription": "Explicitly selected improvements from sessions.",
-    "longDescription": "Analyze settled Codex sessions on one controller and its SSH hosts, retain only redacted findings, and present exact AGENTS.md, skill, or Markdown patches as individually annotatable proposals.",
+    "shortDescription": "Review, comment, and apply session improvements.",
+    "longDescription": "Analyze settled Codex sessions, initialize automatically on first use, and present exact AGENTS.md, skill, or Markdown patches as review cards that can be applied directly from natural replies or inline comments.",
     "developerName": "Pavel Fedotovsky",
     "category": "Productivity",
     "capabilities": [
       "Interactive",
       "Write"
     ],
-    "defaultPrompt": "Use $codex-improver to run the next safety-gated session review now. Analyze only; do not apply proposals."
+    "defaultPrompt": "Use $codex-improver to run the next safety-gated session review now. Initialize with safe defaults if needed, then show every suggestion as an inline-commentable review card."
   }
 }

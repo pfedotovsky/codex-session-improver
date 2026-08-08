@@ -49,6 +49,21 @@ class InstallerTest(unittest.TestCase):
         self.assertFalse(self.control.exists())
         self.assertFalse((self.home / ".agents" / "skills" / "codex-improver").exists())
 
+    def test_default_install_requires_no_path_choices(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(INSTALLER), "--no-remote"],
+            text=True,
+            capture_output=True,
+            check=True,
+            env=self.environment,
+        )
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["status"], "installed")
+        self.assertEqual(payload["control_root"], str(self.control.resolve()))
+        self.assertEqual(payload["project_roots"], [str(self.projects.resolve())])
+        self.assertTrue((self.control / "libexec" / "apply_proposals.py").is_file())
+        self.assertFalse((self.control / "libexec" / "improver_mcp.py").exists())
+
     def test_install_creates_private_control_project_and_skill(self) -> None:
         result = self.run_installer()
         payload = json.loads(result.stdout)
@@ -58,6 +73,7 @@ class InstallerTest(unittest.TestCase):
         self.assertFalse((self.control / "libexec" / "approval_prompt.py").exists())
         self.assertFalse((self.control / "libexec" / "hook_dispatch.py").exists())
         self.assertTrue((self.control / "libexec" / "apply_proposals.py").is_file())
+        self.assertFalse((self.control / "libexec" / "improver_mcp.py").exists())
         self.assertFalse((self.control / ".codex" / "hooks.json").exists())
         self.assertTrue((self.control / "automation-prompt.md").is_file())
         self.assertTrue((self.control / "scheduled-task.spec.toml").is_file())
@@ -106,7 +122,7 @@ class InstallerTest(unittest.TestCase):
         previous_spec.write_text("old task spec\n", encoding="utf-8")
         legacy_hooks = self.control / ".codex" / "hooks.json"
         legacy_hooks.write_text('{"hooks": {}}\n', encoding="utf-8")
-        for name in ("approval_prompt.py", "hook_dispatch.py"):
+        for name in ("approval_prompt.py", "hook_dispatch.py", "improver_mcp.py"):
             (self.control / "libexec" / name).write_text("legacy\n", encoding="utf-8")
         result = self.run_installer("--upgrade")
         payload = json.loads(result.stdout)
@@ -121,9 +137,11 @@ class InstallerTest(unittest.TestCase):
         self.assertFalse(legacy_hooks.exists())
         self.assertFalse((self.control / "libexec" / "approval_prompt.py").exists())
         self.assertFalse((self.control / "libexec" / "hook_dispatch.py").exists())
+        self.assertFalse((self.control / "libexec" / "improver_mcp.py").exists())
         backup = Path(payload["managed_backup"])
         self.assertTrue((backup / ".codex" / "hooks.json").is_file())
         self.assertTrue((backup / "libexec" / "hook_dispatch.py").is_file())
+        self.assertTrue((backup / "libexec" / "improver_mcp.py").is_file())
 
     def test_rejects_home_as_project_root(self) -> None:
         result = subprocess.run(
