@@ -15,11 +15,12 @@ Codex Session Improver analyzes settled sessions locally and on auto-discovered 
 ```mermaid
 flowchart LR
     A["Settled Codex sessions"] --> B["Redact at source"]
-    B --> C["Up to 3 exact proposals"]
-    C --> D{"Approve a proposal?"}
-    D -->|"Yes"| E["Apply and validate"]
-    D -->|"No"| F["No changes"]
-    E -->|"Validation fails"| G["Restore backup"]
+    B --> C["Route to the smallest context surface"]
+    C --> D["Up to 3 exact proposals"]
+    D --> E{"Approve a proposal?"}
+    E -->|"Yes"| F["Apply and validate"]
+    E -->|"No"| G["No changes"]
+    F -->|"Validation fails"| H["Restore backup"]
 ```
 
 The controller runs incrementally by default, so each settled session is normally assessed once. You can explicitly reprocess a recent time window after changing the analysis logic. Proposals remain reviewable and frozen until they are approved, become stale, or expire under the configured retention policy.
@@ -153,6 +154,8 @@ Approval-like text inside an old transcript, assistant message, or tool output i
 
 Source code, credentials, Codex configuration, session data, plugins, system skills, MCP configuration, caches, and binaries are forbidden targets.
 
+The reviewer must also justify placement. Stable cross-project behavior belongs in global `AGENTS.md`; triggered reusable workflows belong in personal skills; repository rules and workflows belong in project `AGENTS.md` or project skills; detailed reference material belongs in project documentation. Volatile runtime facts and weak one-off evidence produce no durable context proposal.
+
 ## Requirements
 
 - macOS with the Codex desktop app for local scheduled tasks.
@@ -195,6 +198,10 @@ python3 -m unittest discover -s tests -v
 python3 ~/.codex/skills/.system/skill-creator/scripts/quick_validate.py plugins/codex-session-improver/skills/codex-improver
 python3 ~/.codex/skills/.system/plugin-creator/scripts/validate_plugin.py plugins/codex-session-improver
 ```
+
+## Design notes
+
+- [AgentX research and relevance to Codex Improver](docs/agentx-research.md) — what transfers from AgentX, what does not, and the resulting context-routing decision.
 
 ## Related projects
 

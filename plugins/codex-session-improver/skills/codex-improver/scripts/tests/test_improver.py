@@ -20,6 +20,7 @@ TEST_SECRET = "sk-" + "abcdefghijklmnopqrstuvwxyz"
 
 from improver_lib import (
     parse_session,
+    proposal_list_data,
     read_json,
     redact_text,
     runtime_dir,
@@ -27,9 +28,9 @@ from improver_lib import (
 )
 from apply_proposals import apply_one
 from host_discovery import concrete_aliases, saved_remote_projects, sync_discovered_hosts
-from proposal_tool import target_snapshot
+from proposal_tool import compatible_context_surfaces, target_snapshot
 from remote_transport import BOOTSTRAP_CODE, remote_hosts
-from session_batch import discover_all, processed_for
+from session_batch import candidate_signal_keys, discover_all, processed_for
 
 
 class ImproverTest(unittest.TestCase):
@@ -138,6 +139,14 @@ class ImproverTest(unittest.TestCase):
                     "source_session_ids": ["thr-test"],
                     "risk": "Low",
                     "rollback": "Restore previous content",
+                    "context_surface": (
+                        "project-skill"
+                        if "/skills/" in target.as_posix()
+                        else "project-agents"
+                        if target.name == "AGENTS.md"
+                        else "project-docs"
+                    ),
+                    "placement_reason": "This is the narrowest durable surface used by the affected workflow.",
                     "changes": [{"path": str(target), "new_content": new_content}],
                 }
             ),
@@ -164,6 +173,23 @@ class ImproverTest(unittest.TestCase):
         self.assertNotIn(TEST_SECRET, serialized)
         self.assertNotIn("me@example.com", serialized)
         self.assertTrue(parsed["errors"])
+
+    def test_candidate_signal_requires_documented_evidence_and_resolution(self) -> None:
+        signal = {
+            "root_cause_key": "missing-validator-dependency",
+            "summary": "Validation repeatedly needs a fallback runtime",
+            "evidence": ["A redacted session showed the same validation detour."],
+            "source_session_ids": ["thr-test"],
+            "source_hosts": ["local"],
+            "status": "open",
+            "resolution": "The task recovered, but no durable prevention was validated.",
+        }
+        self.assertEqual(candidate_signal_keys({"candidate_signals": [signal]}), {"missing-validator-dependency"})
+        for field in ("evidence", "source_hosts", "resolution"):
+            invalid = dict(signal)
+            invalid.pop(field)
+            with self.subTest(field=field), self.assertRaises(RuntimeError):
+                candidate_signal_keys({"candidate_signals": [invalid]})
 
     def test_global_context_audit_projects_only_non_secret_structure(self) -> None:
         codex_home = self.root / "home" / ".codex"
@@ -384,8 +410,11 @@ class ImproverTest(unittest.TestCase):
         signal = {
             "root_cause_key": "missing-validator-dependency",
             "summary": "Validation repeatedly needs a fallback runtime",
+            "evidence": ["A redacted session required a fallback runtime."],
             "source_session_ids": ["thr-one"],
+            "source_hosts": ["local"],
             "status": "open",
+            "resolution": "The task recovered, but the reusable validation gap remains open.",
         }
         findings = self.control / "runtime" / "drafts" / "findings.json"
         findings.parent.mkdir(parents=True, exist_ok=True)
@@ -501,8 +530,32 @@ class ImproverTest(unittest.TestCase):
         self.assertEqual(completed["proposals"][0]["summary"], "Improve instructions")
         self.assertEqual(completed["proposals"][0]["problem"], "A concrete correction exposed a gap")
         self.assertEqual(completed["proposals"][0]["target"], f"local — {target.resolve()}")
+        self.assertEqual(completed["proposals"][0]["context_surface"], "project-docs")
+        self.assertIn("narrowest durable surface", completed["proposals"][0]["placement_reason"])
         self.assertNotIn("approval_question", completed)
         self.assertEqual(read_json(Path(completed["findings"]))["approval_proposal_ids"], [proposal_id])
+
+    def test_legacy_manifest_remains_listable_without_placement_metadata(self) -> None:
+        proposal_id = "P-20260802-89"
+        directory = runtime_dir(self.control) / "proposals" / proposal_id
+        directory.mkdir(parents=True)
+        (directory / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 2,
+                    "id": proposal_id,
+                    "status": "pending",
+                    "target_host": "local",
+                    "expiry_at": "2999-01-01T00:00:00Z",
+                    "summary": "Legacy proposal",
+                    "changes": [{"path": str(self.project / "legacy.md")}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        listed = proposal_list_data(self.control, [proposal_id])
+        self.assertEqual(listed[0]["context_surface"], "unspecified")
+        self.assertEqual(listed[0]["placement_reason"], "")
 
     def test_completion_rejects_a_created_proposal_omitted_from_presentation(self) -> None:
         target = self.project / "new-pending.md"
@@ -628,6 +681,23 @@ class ImproverTest(unittest.TestCase):
             validate_target(self.project / "src" / "app.py", self.config)
         with self.assertRaises(ValueError):
             validate_target(self.project / ".codex" / "config.toml", self.config)
+
+    def test_context_surface_classification_covers_each_allowed_destination(self) -> None:
+        codex_home = self.sessions.parent
+        cases = {
+            codex_home / "AGENTS.md": {"global-agents"},
+            codex_home / "skills" / "example" / "SKILL.md": {"personal-skill"},
+            self.project / "AGENTS.md": {"project-agents"},
+            self.project / ".agents" / "skills" / "example" / "SKILL.md": {"project-skill"},
+            self.project / "docs" / "guide.md": {"project-docs"},
+        }
+        for path, expected in cases.items():
+            with self.subTest(path=path):
+                self.assertEqual(compatible_context_surfaces(self.config, "local", str(path)), expected)
+        self.assertEqual(
+            compatible_context_surfaces(self.config, "dev-1", "/home/me/.codex/skills/example/SKILL.md"),
+            {"personal-skill", "project-skill"},
+        )
 
     def test_remote_host_config_is_explicit_and_strict(self) -> None:
         self.config["remote_hosts"] = [{"id": "dev-1", "ssh_target": "dev.example", "worker_path": "/home/me/worker.py"}]
@@ -837,8 +907,64 @@ class ImproverTest(unittest.TestCase):
         created = self.run_script("proposal_tool.py", "create", "--control-root", str(self.control), "--draft", str(draft))
         manifest = json.loads(created.stdout)
         self.assertEqual(manifest["feedback_scope"], "general")
+        self.assertEqual(manifest["schema_version"], 3)
+        self.assertEqual(manifest["context_surface"], "project-agents")
+        self.assertIn("narrowest durable surface", manifest["placement_reason"])
         self.assertEqual(manifest["source_hosts"], ["dev-1"])
         self.assertEqual(manifest["transfer_directions"], ["dev-1->local"])
+
+    def test_proposal_requires_valid_context_placement(self) -> None:
+        target = self.project / "guide.md"
+        target.write_text("before\n", encoding="utf-8")
+        draft = self.create_draft(target, "after\n")
+        value = json.loads(draft.read_text(encoding="utf-8"))
+        value["context_surface"] = "everywhere"
+        draft.write_text(json.dumps(value), encoding="utf-8")
+        rejected = self.run_script(
+            "proposal_tool.py",
+            "create",
+            "--control-root",
+            str(self.control),
+            "--draft",
+            str(draft),
+            check=False,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("context_surface must be one of", rejected.stderr)
+
+        value["context_surface"] = "project-docs"
+        value["placement_reason"] = ""
+        draft.write_text(json.dumps(value), encoding="utf-8")
+        rejected = self.run_script(
+            "proposal_tool.py",
+            "create",
+            "--control-root",
+            str(self.control),
+            "--draft",
+            str(draft),
+            check=False,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("placement_reason must explain", rejected.stderr)
+
+    def test_proposal_rejects_context_surface_target_mismatch(self) -> None:
+        target = self.project / "guide.md"
+        target.write_text("before\n", encoding="utf-8")
+        draft = self.create_draft(target, "after\n")
+        value = json.loads(draft.read_text(encoding="utf-8"))
+        value["context_surface"] = "global-agents"
+        draft.write_text(json.dumps(value), encoding="utf-8")
+        rejected = self.run_script(
+            "proposal_tool.py",
+            "create",
+            "--control-root",
+            str(self.control),
+            "--draft",
+            str(draft),
+            check=False,
+        )
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("does not match target", rejected.stderr)
 
     def test_remote_proposal_dispatches_only_frozen_host_bound_content(self) -> None:
         self.config["remote_hosts"] = [{"id": "dev-1", "ssh_target": "dev.example", "worker_path": "/home/me/worker.py"}]

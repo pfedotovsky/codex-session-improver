@@ -15,6 +15,7 @@ from improver_lib import (
     atomic_json,
     atomic_text,
     ensure_runtime,
+    is_relative_to,
     iso,
     load_config,
     now,
@@ -27,6 +28,44 @@ from improver_lib import (
     validate_target,
 )
 from remote_transport import HOST_ID_RE, inspect_remote_target, remote_hosts
+
+
+CONTEXT_SURFACES = {
+    "global-agents",
+    "personal-skill",
+    "project-agents",
+    "project-skill",
+    "project-docs",
+}
+
+
+def compatible_context_surfaces(config: dict[str, Any], host_id: str, raw_path: str) -> set[str]:
+    path = Path(raw_path)
+    normalized = path.as_posix()
+    if host_id != "local":
+        if "/skills/" in normalized:
+            return {"personal-skill", "project-skill"}
+        if path.name == "AGENTS.md":
+            return {"global-agents", "project-agents"}
+        return {"project-docs"}
+
+    resolved = path.resolve(strict=False)
+    home = Path.home().resolve()
+    codex_home = Path(
+        str(config.get("sessions_root", home / ".codex" / "sessions"))
+    ).expanduser().resolve().parent
+    if resolved == codex_home / "AGENTS.md":
+        return {"global-agents"}
+    if any(
+        is_relative_to(resolved, root)
+        for root in (codex_home / "skills", home / ".agents" / "skills")
+    ):
+        return {"personal-skill"}
+    if resolved.name == "AGENTS.md":
+        return {"project-agents"}
+    if "/.agents/skills/" in normalized or "/.codex/skills/" in normalized:
+        return {"project-skill"}
+    return {"project-docs"}
 
 
 def next_id(control_root: Path) -> str:
@@ -101,7 +140,17 @@ def create(args: argparse.Namespace) -> int:
     draft = read_json(draft_path)
     if not isinstance(draft, dict):
         raise RuntimeError("Draft must be a JSON object")
-    required = ("summary", "root_cause", "evidence", "source_session_ids", "risk", "rollback", "changes")
+    required = (
+        "summary",
+        "root_cause",
+        "evidence",
+        "source_session_ids",
+        "risk",
+        "rollback",
+        "context_surface",
+        "placement_reason",
+        "changes",
+    )
     missing = [key for key in required if key not in draft]
     if missing:
         raise RuntimeError(f"Draft is missing fields: {', '.join(missing)}")
@@ -118,6 +167,14 @@ def create(args: argparse.Namespace) -> int:
     feedback_scope = str(draft.get("feedback_scope", "host-specific"))
     if feedback_scope not in {"host-specific", "general"}:
         raise RuntimeError("feedback_scope must be host-specific or general")
+    context_surface = draft.get("context_surface")
+    if not isinstance(context_surface, str) or context_surface not in CONTEXT_SURFACES:
+        raise RuntimeError(
+            "context_surface must be one of: " + ", ".join(sorted(CONTEXT_SURFACES))
+        )
+    placement_reason = draft.get("placement_reason")
+    if not isinstance(placement_reason, str) or not placement_reason.strip():
+        raise RuntimeError("placement_reason must explain why this is the smallest effective context surface")
     raw_source_hosts = draft.get("source_hosts")
     if raw_source_hosts is None:
         raw_source_hosts = [str(value).split(":", 1)[0] for value in draft["source_session_ids"] if ":" in str(value)]
@@ -145,6 +202,12 @@ def create(args: argparse.Namespace) -> int:
             raise RuntimeError("Each change requires string path and new_content")
         snapshot = target_snapshot(config, host_id, change["path"])
         target = str(snapshot["path"])
+        compatible_surfaces = compatible_context_surfaces(config, host_id, target)
+        if context_surface not in compatible_surfaces:
+            raise RuntimeError(
+                f"context_surface {context_surface} does not match target {target}; "
+                f"expected one of: {', '.join(sorted(compatible_surfaces))}"
+            )
         if target in seen:
             raise RuntimeError(f"Duplicate target: {target}")
         seen.add(target)
@@ -170,11 +233,13 @@ def create(args: argparse.Namespace) -> int:
 
     created = now()
     manifest = {
-        "schema_version": 2,
+        "schema_version": 3,
         "id": proposal_id,
         "status": "pending",
         "target_host": host_id,
         "feedback_scope": feedback_scope,
+        "context_surface": context_surface,
+        "placement_reason": redact_obj(placement_reason, 1500),
         "source_hosts": source_hosts,
         "transfer_directions": [f"{source}->{host_id}" for source in source_hosts],
         "created_at": iso(created),

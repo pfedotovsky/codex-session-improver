@@ -277,6 +277,8 @@ def proposal_list_data(
                 "summary": str(manifest.get("summary", ""))[:500],
                 "problem": str(manifest.get("root_cause", ""))[:1500],
                 "target": proposal_target(manifest),
+                "context_surface": str(manifest.get("context_surface", "unspecified"))[:100],
+                "placement_reason": str(manifest.get("placement_reason", ""))[:1500],
                 "evidence": redact_obj(manifest.get("evidence", []), 1500),
                 "risk": str(manifest.get("risk", ""))[:1500],
                 "rollback": str(manifest.get("rollback", ""))[:1500],

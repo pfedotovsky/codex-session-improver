@@ -17,6 +17,8 @@ Do not treat normal exploration, an isolated typo, subjective stylistic preferen
 
 A successful retry, fallback, manual workaround, or same-session completion does not erase the friction that required it. Keep the underlying signal when the recovery would be repeated in another session. Mark a signal `durably_resolved` only when a concrete change directly prevents the same cause, has reached the environment where it matters, and has a relevant validation. Otherwise keep it `open`, even when the task eventually succeeded.
 
+For every candidate signal, make `resolution` state the observed session outcome separately from the durable-resolution assessment. Say whether the task was verified, merely claimed complete, blocked, or not established by the retained evidence, then say whether a lasting prevention exists. Record an explicit user correction in `evidence` when one is observable. Do not infer either fact mechanically from tool output or invent certainty when the retained session slice is incomplete.
+
 In particular:
 
 - cluster repeated missing dependencies, fallback-runtime discovery, and equivalent validation detours by their underlying cause rather than by their final outcome;
@@ -47,6 +49,22 @@ Classify transferability explicitly:
 - `general` findings may target the Mac or any compatible discovered/configured remote host, regardless of evidence origin.
 
 For cross-host proposals, require destination compatibility and a concrete validation. Adapt the improvement to existing destination content. Do not propagate repository-specific commands, absolute paths, credentials, access assumptions, local tool availability, or organization-specific policy unless independently valid at the destination.
+
+## Context placement
+
+Before creating a proposal, choose the smallest durable context surface that reaches the sessions affected by the root cause. One proposal must use one `context_surface` and explain the choice in `placement_reason`.
+
+| `context_surface` | Use it for |
+| --- | --- |
+| `global-agents` | A concise, stable behavior that should apply across most repositories and workflows for this user. |
+| `personal-skill` | A reusable multi-step workflow with a recognizable trigger that should load only when relevant. |
+| `project-agents` | A concise repository-specific rule, boundary, command, or completion requirement needed frequently in that project. |
+| `project-skill` | A repository-specific multi-step workflow that should load only for matching tasks. |
+| `project-docs` | Detailed rationale, reference material, or occasional guidance that should not be injected into every project task. |
+
+Prefer project scope over global scope and on-demand skills or documentation over always-loaded instructions when they solve the same problem. Do not duplicate a rule across surfaces merely to make it more visible.
+
+Create no context proposal for volatile runtime facts such as current authentication, service health, tool availability, branch state, or external responses; require deterministic live inspection in an already-supported workflow instead. A one-off incident, weak evidence, or a cause without an effective allowed destination remains an open or discarded signal, not a global rule.
 
 ## Target boundary
 

@@ -103,13 +103,26 @@ def candidate_signal_keys(findings: dict[str, Any]) -> set[str]:
         summary = signal.get("summary")
         if not isinstance(summary, str) or not summary.strip():
             raise RuntimeError(f"Candidate signal {key} requires a summary")
+        evidence = signal.get("evidence")
+        if not isinstance(evidence, list) or not evidence or not all(
+            isinstance(item, str) and item.strip() for item in evidence
+        ):
+            raise RuntimeError(f"Candidate signal {key} requires redacted evidence")
         source_session_ids = signal.get("source_session_ids")
         if not isinstance(source_session_ids, list) or not source_session_ids or not all(
             isinstance(session_id, str) and session_id for session_id in source_session_ids
         ):
             raise RuntimeError(f"Candidate signal {key} requires source_session_ids")
+        source_hosts = signal.get("source_hosts")
+        if not isinstance(source_hosts, list) or not source_hosts or not all(
+            isinstance(host_id, str) and host_id for host_id in source_hosts
+        ):
+            raise RuntimeError(f"Candidate signal {key} requires source_hosts")
         if signal.get("status") not in allowed_statuses:
             raise RuntimeError(f"Candidate signal {key} has an invalid status")
+        resolution = signal.get("resolution")
+        if not isinstance(resolution, str) or not resolution.strip():
+            raise RuntimeError(f"Candidate signal {key} requires a resolution assessment")
         keys.add(key)
     return keys
 
